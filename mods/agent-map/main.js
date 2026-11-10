@@ -20,7 +20,7 @@
 // names, colors and order from shared "machine.prefs"). How long an agent has
 // rested comes from hc (`status_ms` in `hc get`), read once per open.
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input } from "gpui-base";
+import { v_flex, h_flex, InputState, Input, Popup } from "gpui-base";
 import { hc, exec, theme, props, closeOverlay, shared, setShared, spaces, panes, terminals, run, readTextFile, appHome, settings, focused } from "herdr";
 import { makeUpdater } from "./update.js";
 import { demo } from "./demo.js";
@@ -28,7 +28,7 @@ import { demo } from "./demo.js";
 // "Update Agent Map" in the header when a newer release is out.
 const UPDATER = makeUpdater({
   repo: "jenthous/herdr-app-agent-map",
-  version: "0.1.2",
+  version: "0.1.3",
   key: "agent-map.update",
   mod: "agent-map",
   name: "Agent Map",
@@ -67,7 +67,7 @@ const STR = {
     l1: "<1d", l2: "1–3d", l3: "3d+",
     ago: (m) => (m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 1440)}d`),
     switchLang: "한",
-    keys: [["↑↓", "move"], ["←→", "board"], ["⏎", "go"], ["/", "find"], ["a", "everything"], ["s", "shells"], ["l", "한국어"], ["esc", "close"]],
+    keys: [["↑↓", "move"], ["←→", "board"], ["⏎", "go"], ["/", "find"], ["a", "everything"], ["s", "shells"], ["l", "한국어"], ["=", "re-place"], ["esc", "close"]],
   },
   ko: {
     title: "에이전트 지도",
@@ -93,7 +93,7 @@ const STR = {
     l1: "~1일", l2: "1~3일", l3: "3일+",
     ago: (m) => (m < 60 ? `${m}분` : m < 1440 ? `${Math.floor(m / 60)}시간` : `${Math.floor(m / 1440)}일`),
     switchLang: "EN",
-    keys: [["↑↓", "이동"], ["←→", "보드"], ["⏎", "가기"], ["/", "찾기"], ["a", "전체"], ["s", "셸"], ["l", "English"], ["esc", "닫기"]],
+    keys: [["↑↓", "이동"], ["←→", "보드"], ["⏎", "가기"], ["/", "찾기"], ["a", "전체"], ["s", "셸"], ["l", "English"], ["=", "다시 배치"], ["esc", "닫기"]],
   },
 };
 
@@ -279,40 +279,75 @@ export default class AgentMap extends View {
   // the last lines on its screen, read on the first hover.
   hoverOn(addr, label, bi) {
     return (h, cx) => {
-      if (h) { this.hover = { addr, label }; this.peek(addr, cx); cx.notify(); }
-      else if (this.hover?.addr === addr) { this.hover = null; cx.notify(); }
+      if (h) {
+        if (this.away === addr) return;
+        this.away = null;
+        this.kb = false; // the pointer took over: no keyboard card left behind when it goes
+        this.hover = { addr, label };
+        this.peek(addr, cx);
+        cx.notify();
+      }
+      else {
+        if (this.away === addr) this.away = null; // left it: pointing at it again shows the card again
+        if (this.hover?.addr === addr) { this.hover = null; cx.notify(); }
+      }
     };
   }
 
-  // Where the element under the pointer is (window coordinates), for the card.
-  at(addr) {
-    return (e, cx) => {
-      const b = e.bounds;
-      if (!b || this.hover?.addr !== addr) return;
-      const o = this.hover.b;
-      if (!o || o.x !== b.x || o.y !== b.y) { this.hover.b = { x: b.x, y: b.y, width: b.width, height: b.height }; cx.notify(); }
-    };
+  // The card (what it is, the last lines on its screen), hung under the item by a
+  // Popup, which measures the item and keeps the card inside the window. It shows
+  // for the item under the pointer, else, once the arrows are used, the selected one.
+  // The card for the arrow keys hangs under the selected item (a Popup measures
+  // it). The pointer's card is drawn by the window itself (pointerCard), at a place
+  // worked out before it's drawn, so it never shows up somewhere first and moves.
+  pop(t, T, addr, label, el, bi, under = false) {
+    const keyboard = !this.hover && this.kb && addr === this.sel && addr !== this.away;
+    return Popup.new(`am-pop-${addr}`, el
+      .on_mouse_move((e, cx) => {
+        const b = e.bounds;
+        if (!b) return;
+        const o = (this.boxes ??= {})[addr];
+        if (o && o.x === b.x && o.y === b.y && o.width === b.width) return;
+        this.boxes[addr] = { x: b.x, y: b.y, width: b.width, height: b.height, bi, under };
+        if (this.hover?.addr === addr) cx.notify();
+      }))
+      .anchor("top_left")
+      .when(keyboard, (p) => p.content(div().pt(4).child(this.cardBody(t, T, addr, label))));
   }
 
-  card(t, T) {
-    const h = this.hover;
-    if (!h) return null;
-    const p = PEEK.get(h.addr);
+  // Beside the item for rows and pills, over the neighbouring column (right; left
+  // from the right-hand column), its top level with the item, so the column you move
+  // through stays clear; under it for cells (you move across those). Nothing is
+  // drawn until the item's and the window's places are known.
+  pointerCard(t, T) {
+    const h = this.hover, b = h && this.boxes?.[h.addr], r = this.rootB;
+    if (!b || !r) return null;
+    const W = 376, H = 170;
+    let x, y;
+    if (b.under) { x = b.x - r.x; y = b.y - r.y + b.height + 4; }
+    else {
+      const right = (this.colOfBoard?.[b.bi] ?? 0) < 2;
+      x = right ? b.x - r.x + b.width + 12 : b.x - r.x - W - 12;
+      y = b.y - r.y - 2;
+    }
+    x = Math.max(8, Math.min(x, r.width - W - 8));
+    y = Math.max(52, Math.min(y, r.height - 34 - H));
+    return div().id("am-pointer-card").absolute().left(x).top(y)
+      // a card can't let the pointer through: reaching it puts it away
+      .on_hover((on, cx) => { if (on) { this.away = h.addr; this.hover = null; cx.notify(); } })
+      .child(this.cardBody(t, T, h.addr, h.label));
+  }
+
+  cardBody(t, T, addr, label) {
+    const p = PEEK.get(addr);
     const text = p?.text || (p && !p.busy ? "" : T.loading);
     const mono = settings().font_family ?? "JetBrains Mono";
-    // Right under what it describes, its left edge with it; above it when there's
-    // no room below. Until both places are known, nothing is drawn.
-    const b = h.b, r = this.rootB;
-    if (!b || !r) return null;
-    const W = 376, H = 150, x = b.x - r.x, y = b.y - r.y;
-    const left = Math.max(14, Math.min(x, r.width - W - 14));
-    const below = y + b.height + 6 + H < r.height - 34;
-    return v_flex().absolute().left(left).when(below, (el) => el.top(y + b.height + 6)).when(!below, (el) => el.bottom(r.height - y + 6)).w(W).p(10).gap(6).rounded(8)
+    return v_flex().w(376).p(10).gap(6).rounded(8)
       .bg(t.raised).border_1().border_color(t.border).shadow_lg()
-      .child(h_flex().gap(8).items_center().text_size(11.5)
-        .child(div().min_w(0).truncate().font_semibold().child(h.label))
+      .child(h_flex().gap(8).items_center().text_size(11.5).text_color(t.foreground)
+        .child(div().min_w(0).truncate().font_semibold().child(label))
         .child(div().flex_1())
-        .child(div().flex_none().text_color(t.dim).font_family(mono).text_size(11).child(h.addr)))
+        .child(div().flex_none().text_color(t.dim).font_family(mono).text_size(11).child(addr)))
       .when(Boolean(text), (el) => el.child(v_flex().text_size(11.5).font_family(mono).text_color(t.muted)
         .children(text.split("\n").map((l) => div().truncate().child(l || " ")))));
   }
@@ -353,6 +388,8 @@ export default class AgentMap extends View {
       const i = Math.max(0, this.nav.findIndex((r) => r.key === this.sel));
       const n = this.nav.length;
       if (n) this.sel = this.nav[this.sel == null ? 0 : (i + (k === "down" ? 1 : -1) + n) % n].key;
+      this.hover = null; this.away = null;
+      if (this.sel) this.peek(this.sel, cx);
     } else if (k === "left" || k === "right") {
       if (typing) return;
       this.kb = true;
@@ -361,6 +398,8 @@ export default class AgentMap extends View {
       const bi = boards.indexOf(cur?.board);
       const next = boards[(bi + (k === "right" ? 1 : -1) + boards.length) % boards.length];
       this.sel = this.nav.find((r) => r.board === next)?.key ?? this.sel;
+      this.hover = null; this.away = null;
+      if (this.sel) this.peek(this.sel, cx);
     } else if (k === "enter") {
       if (typing) return;
       this.go(this.current());
@@ -370,12 +409,66 @@ export default class AgentMap extends View {
       this.search.focus();
     } else if (k === "a") {
       this.all = !this.all; setShared("agent-map.all", this.all);
+    } else if (k === "=") {
+      setShared("agent-map.layout", null);
     } else if (k === "l") {
       this.toggleLang();
     } else if (k === "s") {
       this.shells = !this.shells; setShared("agent-map.shells", this.shells);
     } else return;
     cx.stop_propagation();
+    cx.notify();
+  }
+
+  // ---------- where boards go ----------
+
+  // Three columns. A computer keeps the column (and place) it was given, saved in
+  // shared "agent-map.layout"; one seen for the first time goes under the shortest
+  // column. Dragging a board's head moves it; "=" places them all afresh.
+  place(drawn) {
+    const saved = (shared("agent-map.layout")?.cols ?? []).slice(0, 3);
+    while (saved.length < 3) saved.push([]);
+    const known = new Set(saved.flat());
+    const shown = new Set(drawn.map((d) => d.key));
+    const cols = saved.map((c) => c.filter((k) => shown.has(k)));
+    const weight = (k) => drawn.find((d) => d.key === k)?.weight ?? 0;
+    const h = cols.map((c) => c.reduce((a, k) => a + weight(k), 0));
+    const fresh = drawn.filter((d) => !known.has(d.key));
+    for (const d of fresh) {
+      const i = h.indexOf(Math.min(...h));
+      cols[i].push(d.key); saved[i].push(d.key); h[i] += d.weight;
+    }
+    if (fresh.length && !this.demo) setShared("agent-map.layout", { cols: saved });
+    return cols;
+  }
+
+  // A board in its column: it takes a drop above it while one is dragged.
+  slot(t, d, col) {
+    const k = d.key, dragged = this.drag === k, over = this.over?.col === col && this.over?.before === k;
+    return div().id(`am-slot-${k}`).relative().when(dragged, (el) => el.opacity(0.4))
+      .on_mouse_move((_e, cx) => { if (this.drag && this.drag !== k && !(this.over?.col === col && this.over?.before === k)) { this.over = { col, before: k }; cx.notify(); } })
+      .when(over, (el) => el.child(div().absolute().top(-8).left(0).right(0).h(3).rounded(2).bg(t.accent)))
+      .child(d.el);
+  }
+
+  // Below a column's last board: a drop there puts it at the end.
+  tail(t, col) {
+    const over = this.over?.col === col && this.over?.before == null;
+    return div().id(`am-tail-${col}`).relative().h(this.drag ? 120 : 0)
+      .on_mouse_move((_e, cx) => { if (this.drag && !(this.over?.col === col && this.over?.before == null)) { this.over = { col, before: null }; cx.notify(); } })
+      .when(over, (el) => el.child(div().absolute().top(-8).left(0).right(0).h(3).rounded(2).bg(t.accent)));
+  }
+
+  drop(cx) {
+    const k = this.drag, o = this.over;
+    this.drag = null; this.over = null;
+    if (k && o && !this.demo) {
+      const saved = (shared("agent-map.layout")?.cols ?? [[], [], []]).map((c) => c.filter((x) => x !== k));
+      while (saved.length < 3) saved.push([]);
+      const c = saved[o.col], i = o.before ? c.indexOf(o.before) : -1;
+      c.splice(i < 0 ? c.length : i, 0, k);
+      setShared("agent-map.layout", { cols: saved });
+    }
     cx.notify();
   }
 
@@ -389,10 +482,10 @@ export default class AgentMap extends View {
     this.nav = [];
     const drawn = boards.map((b, bi) => { const d = this.board(t, T, b, bi, q); return d && { ...d, bi }; }).filter(Boolean);
     if (this.sel != null && !this.nav.some((r) => r.key === this.sel)) this.sel = null;
-    // three columns, each board where the column is shortest
-    const cols = [[], [], []], h = [0, 0, 0];
-    this.colOf = {};
-    for (const d of drawn) { const i = h.indexOf(Math.min(...h)); cols[i].push(d.el); h[i] += d.weight; this.colOf[d.bi] = i; }
+    const placed = this.place(drawn);
+    this.colOfBoard = {};
+    placed.forEach((keys, ci) => keys.forEach((k) => { const d = drawn.find((x) => x.key === k); if (d) this.colOfBoard[d.bi] = ci; }));
+    const cols = placed.map((keys, ci) => keys.map((k) => this.slot(t, drawn.find((d) => d.key === k), ci)));
     const n = { working: 0, blocked: 0, done: 0, bg: 0 };
     for (const b of boards) for (const s of b.sessions) for (const sp of s.spaces) for (const tb of sp.tabs) for (const x of tb.terms) {
       if (n[x.status] != null) n[x.status]++;
@@ -401,17 +494,19 @@ export default class AgentMap extends View {
     let body;
     if (!this.groups) body = div().p(16).text_color(t.dim).child(T.loading);
     else if (!drawn.length) body = div().p(16).text_color(t.dim).child(T.none);
-    else body = h_flex().items_start().gap(12).p(14).children(cols.map((c) => v_flex().flex_1().min_w(0).gap(12).children(c)));
-    const card = this.card(t, T);
+    else body = h_flex().items_start().gap(12).p(14).children(cols.map((c, ci) => v_flex().flex_1().min_w(0).gap(12).children(c).child(this.tail(t, ci))));
+    this.shown = this.hover?.addr ?? (this.kb && this.sel !== this.away ? this.sel : null);
     return v_flex().id("agent-map").relative().track_focus(this.handle).size_full()
-      .on_mouse_move((e) => { const b = e.bounds; if (b && (!this.rootB || this.rootB.width !== b.width || this.rootB.height !== b.height || this.rootB.x !== b.x || this.rootB.y !== b.y)) this.rootB = { x: b.x, y: b.y, width: b.width, height: b.height }; }).min_h(0).bg(t.popover).text_color(t.foreground).text_size(12.5)
+      .on_mouse_up("left", (_e, cx) => this.drop(cx))
+      .on_mouse_move((e) => { const b = e.bounds; if (b) this.rootB = { x: b.x, y: b.y, width: b.width, height: b.height }; })
+      .on_hover((h, cx) => { if (!h && this.hover) { this.hover = null; cx.notify(); } }).min_h(0).bg(t.popover).text_color(t.foreground).text_size(12.5)
       .on_key_down((e, cx) => this.key(e, cx))
       .child(this.header(t, T, n))
       .child(div().id("am-scroll").flex_1().min_h(0).overflow_y_scrollbar().child(body))
       .child(h_flex().h(30).flex_none().px(16).gap(14).items_center().border_t(1).border_color(t.border).text_size(11).text_color(t.dim)
         .children(T.keys.map(([k, v]) => h_flex().gap(5).items_center().child(this.kbd(t, k)).child(v)))
         .child(div().flex_1()).child("⌘G"))
-      .when(Boolean(card), (el) => el.child(card));
+      .child(this.pointerCard(t, T) ?? div());
   }
 
   kbd(t, k) {
@@ -501,13 +596,14 @@ export default class AgentMap extends View {
     }
     if (!parts.length) return null;
     const el = v_flex().rounded(10).border_1().border_color(mine.some((x) => x.status === "blocked") ? alpha(t.blocked, "99") : t.border).bg(t.background).pb(multi ? 8 : 0)
-      .child(h_flex().h(36).px(12).gap(8).items_center().border_b(1).border_color(t.border)
+      .child(h_flex().id(`am-head-${b.g.key}`).h(36).px(12).gap(8).items_center().border_b(1).border_color(t.border).cursor_pointer()
+        .on_mouse_down("left", (_e, cx) => { cx.stop_propagation(); this.drag = b.g.key; this.over = null; cx.notify(); })
         .child(div().size(10).rounded(3).bg(color))
         .child(div().font_semibold().child(b.label))
         .when(multi, (el) => el.child(div().px(5).rounded(5).border_1().border_color(t.border).text_size(10.5).text_color(t.dim).child(T.sessions(b.sessions.length))))
         .child(div().flex_1()).child(this.counts(t, mine)))
       .children(parts);
-    return { el, weight };
+    return { el, weight, key: b.g.key };
   }
 
   sessionPart(t, T, b, s, bi, q, color) {
@@ -616,7 +712,7 @@ export default class AgentMap extends View {
       .when(on && this.kb, (el) => el.border_color(t.accent).bg(t.hover))
       .hover((s) => s.bg(t.hover))
       .on_mouse_down("left", stop).on_click(() => this.go({ go: () => this.goTerm(x) }))
-      .on_mouse_move(this.at(x.address)).on_hover(this.hoverOn(x.address, [name, tab].filter(Boolean).join(" · ") || x.address, bi))
+      .on_hover(this.hoverOn(x.address, [name, tab].filter(Boolean).join(" · ") || x.address, bi))
       .child(this.dot(t, x.status))
       .when(Boolean(name), (el) => el.child(div().flex_none().max_w(200).truncate().font_medium().text_color(lead).child(name)))
       .when(Boolean(tab), (el) => el.child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(name ? t.muted : lead).child(tab)))
@@ -626,20 +722,21 @@ export default class AgentMap extends View {
       .when(this.here(x), (el) => el.child(svg("mods/agent-map/icons/eye.svg").size(13).flex_none().text_color(t.accent)
         .loop("opacity", { from: 1, to: 0.2, period: 1600 })))
       .when(Boolean(age) && !this.here(x), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(age)));
-    if (!x.bg.length) return line;
+    const shown = this.pop(t, T, x.address, [name, tab].filter(Boolean).join(" · ") || x.address, line, bi);
+    if (!x.bg.length) return shown;
     // pills keep their own width: each in a row of its own
-    return v_flex().child(line).child(this.fork(t, x.bg.map((k) => ({ el: h_flex().child(this.pill(t, T, bi, k)), mid: 11 }))));
+    return v_flex().child(shown).child(this.fork(t, x.bg.map((k) => ({ el: h_flex().child(this.pill(t, T, bi, k)), mid: 11 }))));
   }
 
   pill(t, T, bi, k) {
     const on = this.row(k.address, bi, () => run("agent.focus", { terminal: k.address }));
-    return h_flex().id(`am-${k.address}`).h(22).px(7).gap(5).items_center().rounded(11).bg(t.raised).text_size(11).cursor_pointer()
+    return this.pop(t, T, k.address, k.name, h_flex().id(`am-${k.address}`).h(22).px(7).gap(5).items_center().rounded(11).bg(t.raised).text_size(11).cursor_pointer()
       .when(on && this.kb, (el) => el.border_1().border_color(t.accent))
       .hover((s) => s.bg(t.hover))
       .on_mouse_down("left", stop).on_click(() => this.go({ go: () => run("agent.focus", { terminal: k.address }) }))
-      .on_mouse_move(this.at(k.address)).on_hover(this.hoverOn(k.address, k.name, bi))
+      .on_hover(this.hoverOn(k.address, k.name, bi))
       .child(this.dot(t, k.status)).child(k.name)
-      .when(k.alsoTab, (el) => el.child(div().text_color(t.dim).child(`· ${T.alsoTab}`)));
+      .when(k.alsoTab, (el) => el.child(div().text_color(t.dim).child(`· ${T.alsoTab}`))), bi);
   }
 
   // A space where everything rests: its head says so, its tabs are rows newest first,
@@ -665,13 +762,14 @@ export default class AgentMap extends View {
       const on = this.row(c.x.address, bi, () => this.goTerm(c.x));
       const at = this.since(c.x);
       const tip = `${c.sp.name}${c.tb.name !== c.sp.name ? ` › ${c.tb.name}` : ""} · ${c.x.address}${at ? ` · ${T.ago(Math.floor((now - at) / 60000))}` : ""}`;
-      return div().id(`am-${c.x.address}`).size(12).rounded(3).cursor_pointer()
+      const label = tip.split(" · ")[0] + (at ? ` · ${T.ago(Math.floor((now - at) / 60000))}` : "");
+      return this.pop(t, T, c.x.address, label, div().id(`am-${c.x.address}`).size(12).rounded(3).cursor_pointer()
         .when(kind === "shell", (el) => el.border_1().border_dashed().border_color(t.border))
         .when(kind !== "shell", (el) => el.bg(this.cellColor(t, kind)).when(kind === "old", (e2) => e2.border_1().border_color(t.border)))
         .when(on && this.kb, (el) => el.border_1().border_color(t.accent))
         .hover((s) => s.border_1().border_color(t.foreground))
         .on_mouse_down("left", stop).on_click(() => this.go({ go: () => this.goTerm(c.x) }))
-        .on_mouse_move(this.at(c.x.address)).on_hover(this.hoverOn(c.x.address, tip.split(" · ")[0] + (at ? ` · ${T.ago(Math.floor((now - at) / 60000))}` : ""), bi));
+        .on_hover(this.hoverOn(c.x.address, label, bi)), bi, true);
     };
     return h_flex().items_start().gap(8).px(12).py(8).when(ruled, (el) => el.border_t(1).border_color(t.border)).text_size(11).text_color(t.dim)
       .child(v_flex().w(64).flex_none()
