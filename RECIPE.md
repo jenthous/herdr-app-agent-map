@@ -19,7 +19,8 @@ A window (`⌘G`) with a board per computer Herdr reaches and, inside each, a tr
   - **Everything rests (no agent working, waiting or done, no sub-agents) and several tabs:** one dashed row "machine-web 2 tabs resting", then its terminals as wrapping pills (20 px, radius 10, up to 180 px, the tab name): `raised` when it rested under 12 h, `background` with a `border` and `dim` text after.
   - **Moving agents:** working, waiting and done rows get a 1 px border in their status color at 47% on `raised` (waiting: also the `blocked` tint 10%). Idle rows have no border and `muted` text.
   - Shells (with Shells on) get a dashed "shell" tag.
-  - The terminal id (`studio/t3x`) is the row's tooltip only.
+  - The terminal id (`studio/t3x`) shows only in the hover card.
+- **Hover card:** while the pointer is on a row, pill or cell, at once (no tooltip delay): 376 px wide (one column), 38 px above the bottom, over the left column (the right one when the pointer is in the left column), `raised`, `border`, radius 8, large shadow, 10 px padding: the space · tab (or name) semibold 11.5 px and the address in mono `dim` on the right, then the last 6 non-empty lines of its screen in mono 11.5 px `muted`, each cut to one line ("Reading…" until read).
 - **Cells:** under the tree (1 px `border` above when there is a tree), 12 px left: "12h+ 3" (and "shells 2") in `dim` 11 px, 64 px wide, then 12 px squares (radius 3), 3 px apart, wrapping, newest first: `muted` 80% under a day, `muted` 33% from one to three days, `background` with a `border` after; shells as dashed squares after a 6 px gap. Tooltip: "space › tab · address · 2d".
 - **Footer (30 px, 1 px `border` above, `dim` 11 px):** key caps and words: ↑↓ move, ←→ board, ⏎ go, / find, a everything, s shells, l 한국어, esc close; ⌘G on the right.
 - **Status marks (14 px slot, 12 px in counts):** working: `icons/spinner.svg` 11 px in `working`, spinning (900 ms); waiting (blocked or error): a 7 px `blocked` dot; done: `icons/check.svg` 12 px in `done`; idle: a 7 px ring, 1.5 px `idle` (else `dim`); shell: a 7 px square, radius 2, `border`.
@@ -34,7 +35,8 @@ A window (`⌘G`) with a board per computer Herdr reaches and, inside each, a tr
 - **Search:** case-insensitive substring over the computer's name, the session, the space, the tab, the agent's app and name, its address and its sub-agents' names; only matching terminals are shown, unfolded.
 - **Saved:** Everything and Shells (shared `agent-map.all`, `agent-map.shells`) and the language picked here (`agent-map.lang`).
 - **Language:** the one picked here, else `language` in `mods/agent-map/config.json`, else in `mods/machine-switch/config.json`, else macOS `AppleLanguages`, else English.
-- **Update check:** on open, at most once a day, one GET to `api.github.com/repos/jenthous/herdr-app-agent-map/releases/latest` (no token), remembered in shared `agent-map.update`. A tag newer than `0.1.0` shows "Update Agent Map" (a 6 px `accent` dot, 11.5 px `accent`) in the header; it opens a 460×400 dialog (this mod, props `{ role: "update", lang }`) with the release notes, the prompt for the agent, "Stop checking", Later, Release page, Copy prompt. `update.js` is the same file as in herdr-machine-rail and herdr-app-linear.
+- **Screen preview:** `hc read <address> --json` on hover, at most every 15 s per terminal, kept in memory; lines under a `────` rule in the last 14 (an agent's input box and status) are dropped, blank ones too, long indents shortened, lines cut at 110 characters.
+- **Update check:** on open, at most once a day, one GET to `api.github.com/repos/jenthous/herdr-app-agent-map/releases/latest` (no token), remembered in shared `agent-map.update`. A tag newer than `0.1.1` shows "Update Agent Map" (a 6 px `accent` dot, 11.5 px `accent`) in the header; it opens a 460×400 dialog (this mod, props `{ role: "update", lang }`) with the release notes, the prompt for the agent, "Stop checking", Later, Release page, Copy prompt. `update.js` is the same file as in herdr-machine-rail and herdr-app-linear.
 - **Demo:** `"demo": true` in `config.json` shows the made-up computers of `demo.js` (nothing is run, clicks go nowhere, Everything and Shells start off).
 
 ## Built from
@@ -62,4 +64,4 @@ A window (`⌘G`) with a board per computer Herdr reaches and, inside each, a tr
 - An idle agent alone in its space shows its rest time; once it has rested 12 h it moves into the cells; `a` brings it back to the tree.
 - Clicking a row, pill or cell shows that agent and closes the window; ↑↓ and Enter do the same; `/` and typing a tab's name leaves only that branch.
 - `l` switches English / Korean and stays after reopening.
-- With a release newer than `0.1.0` on GitHub, the header shows "Update Agent Map".
+- With a release newer than `0.1.1` on GitHub, the header shows "Update Agent Map".

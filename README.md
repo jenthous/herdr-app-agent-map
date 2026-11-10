@@ -15,6 +15,7 @@ With a few computers, a few hc sessions each and dozens of spaces, the sidebar s
 - **Herdr's marks.** Working spins, waiting is a red dot, done is a check, idle an empty ring. Moving agents are outlined in their color; a board with a waiting agent gets a red edge.
 - **Rest folds away.** Idle rows show how long they've rested. After 12 hours an agent alone in its space becomes a small cell under the tree (lighter under a day, darker after three); a space where everything rests becomes one line with its tabs as pills. **Everything** (`a`) unfolds it all; **Shells** (`s`) adds terminals without an agent.
 - **Go there.** A click, or ↑↓ / ←→ and Enter, shows that agent (`agent.focus`) or shell and closes the window. Terminal ids appear on hover.
+- **Preview on hover.** Point at any row, pill or cell: a card over another column shows its last screen lines at once.
 - **Find.** `/` filters by computer, session, space, tab, agent or sub-agent name.
 - **English and Korean.** `EN`/`한` or `l`.
 - **Update check.** "Update Agent Map" in the header when a newer release is out (at most one GitHub request a day; "Stop checking" turns it off).
@@ -41,7 +42,7 @@ Or by hand: copy `mods/agent-map` into `~/.config/herdr-app/mods/`, merge `keys.
 
 ## What it touches
 
-- **Programs:** `hc machine ls --json` when the window opens, and `hc get <terminal> --json` for each agent whose status changed (when it last changed; up to 8 at a time, while the window is open).
+- **Programs:** `hc machine ls --json` when the window opens, and `hc get <terminal> --json` for each agent whose status changed (when it last changed; up to 8 at a time, while the window is open), and `hc read <terminal> --json` for the one under the pointer (at most every 15 s each).
 - **Files:** `mods/agent-map/config.json` and `mods/machine-switch/config.json` (language), read only.
 - **Network:** at most once a day, one GET to `api.github.com/repos/jenthous/herdr-app-agent-map/releases/latest` (no token, nothing about you).
 - **Shared state:** `agent-map.all`, `agent-map.shells`, `agent-map.lang`, `agent-map.update`; reads `machine.prefs`.

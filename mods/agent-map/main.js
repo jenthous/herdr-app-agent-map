@@ -21,14 +21,14 @@
 // rested comes from hc (`status_ms` in `hc get`), read once per open.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { hc, exec, theme, props, closeOverlay, shared, setShared, spaces, panes, terminals, run, readTextFile, appHome } from "herdr";
+import { hc, exec, theme, props, closeOverlay, shared, setShared, spaces, panes, terminals, run, readTextFile, appHome, settings } from "herdr";
 import { makeUpdater } from "./update.js";
 import { demo } from "./demo.js";
 
 // "Update Agent Map" in the header when a newer release is out.
 const UPDATER = makeUpdater({
   repo: "jenthous/herdr-app-agent-map",
-  version: "0.1.0",
+  version: "0.1.1",
   key: "agent-map.update",
   mod: "agent-map",
   name: "Agent Map",
@@ -97,6 +97,21 @@ const STR = {
 
 // When each terminal's status last changed (ms), kept across opens.
 const SINCE = new Map(); // address → { status, at }
+// The last lines of a terminal's screen, read on hover: address → { at, text }.
+const PEEK = new Map();
+const PEEK_FRESH = 15000;
+
+// A screen's last few lines worth reading: an agent's input box and status lines
+// (under a ──── rule near the bottom) and blank lines left out.
+function lastLines(text, n = 6) {
+  let lines = String(text ?? "").split("\n").map((l) => l.replace(/\s+$/, ""));
+  const tail = Math.max(0, lines.length - 14);
+  const rule = lines.findIndex((l, i) => i >= tail && /^\s*[─━]{10,}/.test(l));
+  if (rule > 0) lines = lines.slice(0, rule);
+  return lines.filter((l) => l.trim()).slice(-n)
+    .map((l) => l.replace(/^\s{8,}/, "  "))
+    .map((l) => (l.length > 110 ? l.slice(0, 109) + "…" : l)).join("\n");
+}
 
 async function readConfig(name) {
   try { return JSON.parse((await readTextFile(`${appHome()}/mods/${name}/config.json`)) ?? "null") ?? {}; } catch { return {}; }
@@ -128,6 +143,7 @@ export default class AgentMap extends View {
     this.shells = shared("agent-map.shells") === true;
     this.query = "";
     this.sel = null; // key of the selected row
+    this.hover = null; // { addr, label } under the pointer
     this.nav = []; // rows in reading order, rebuilt by render: { key, board, go }
     this.search = InputState.new({});
     this.search.on("change", (_e, cx) => { this.query = this.search.value(); this.sel = null; cx.notify(); });
@@ -242,6 +258,48 @@ export default class AgentMap extends View {
     return [...out.values()].map((b) => ({ ...b, sessions: [...b.sessions.values()] }));
   }
 
+  // Read the screen of what's under the pointer (at most every 15 s per terminal).
+  peek(addr, cx) {
+    const p = PEEK.get(addr);
+    if (this.demo || (p && Date.now() - p.at < PEEK_FRESH) || p?.busy) return;
+    PEEK.set(addr, { ...(p ?? { text: "" }), busy: true, at: p?.at ?? 0 });
+    cx.spawn(async (cx) => {
+      let text = p?.text ?? "";
+      try { const r = await hc(["read", addr, "--json"]); if (r.code === 0) text = lastLines(JSON.parse(r.stdout).text); } catch {}
+      PEEK.set(addr, { at: Date.now(), text, busy: false });
+      cx.notify();
+    });
+  }
+
+  // Hovering shows a card at once (a tooltip waits half a second): what it is and
+  // the last lines on its screen, read on the first hover.
+  hoverOn(addr, label, bi) {
+    return (h, cx) => {
+      if (h) { this.hover = { addr, label, col: this.colOf?.[bi] ?? 0 }; this.peek(addr, cx); cx.notify(); }
+      else if (this.hover?.addr === addr) { this.hover = null; cx.notify(); }
+    };
+  }
+
+  card(t, T) {
+    const h = this.hover;
+    if (!h) return null;
+    const p = PEEK.get(h.addr);
+    const text = p?.text || (p && !p.busy ? "" : T.loading);
+    const mono = settings().font_family ?? "JetBrains Mono";
+    // one column wide (1180 - 2×14 padding - 2×12 gaps) / 3, over a column the
+    // pointer is not in: the left one, or the right one when the pointer is there
+    const left = h.col !== 0;
+    return v_flex().absolute().bottom(38).when(left, (el) => el.left(14)).when(!left, (el) => el.right(14)).w(376).p(10).gap(6).rounded(8)
+      .bg(t.raised).border_1().border_color(t.border).shadow_lg()
+      .child(h_flex().gap(8).items_center().text_size(11.5)
+        .child(div().min_w(0).truncate().font_semibold().child(h.label))
+        .child(div().flex_1())
+        .child(div().flex_none().text_color(t.dim).font_family(mono).text_size(11).child(h.addr)))
+      .when(Boolean(text), (el) => el.child(v_flex().text_size(11.5).font_family(mono).text_color(t.muted)
+        .children(text.split("\n").map((l) => div().truncate().child(l || " ")))));
+  }
+
+
   since(x) { return x.mins != null ? Date.now() - x.mins * 60000 : SINCE.get(x.address)?.at ?? 0; }
   live(x) { return x.status === "working" || x.status === "blocked" || x.status === "done"; }
   resting(x) { const at = this.since(x); return !at || Date.now() - at >= QUIET; }
@@ -307,11 +365,12 @@ export default class AgentMap extends View {
     const boards = this.groups ? this.model() : [];
     const q = lower(this.query.trim());
     this.nav = [];
-    const drawn = boards.map((b, bi) => this.board(t, T, b, bi, q)).filter(Boolean);
+    const drawn = boards.map((b, bi) => { const d = this.board(t, T, b, bi, q); return d && { ...d, bi }; }).filter(Boolean);
     if (this.sel != null && !this.nav.some((r) => r.key === this.sel)) this.sel = null;
     // three columns, each board where the column is shortest
     const cols = [[], [], []], h = [0, 0, 0];
-    for (const d of drawn) { const i = h.indexOf(Math.min(...h)); cols[i].push(d.el); h[i] += d.weight; }
+    this.colOf = {};
+    for (const d of drawn) { const i = h.indexOf(Math.min(...h)); cols[i].push(d.el); h[i] += d.weight; this.colOf[d.bi] = i; }
     const n = { working: 0, blocked: 0, done: 0, bg: 0 };
     for (const b of boards) for (const s of b.sessions) for (const sp of s.spaces) for (const tb of sp.tabs) for (const x of tb.terms) {
       if (n[x.status] != null) n[x.status]++;
@@ -321,13 +380,15 @@ export default class AgentMap extends View {
     if (!this.groups) body = div().p(16).text_color(t.dim).child(T.loading);
     else if (!drawn.length) body = div().p(16).text_color(t.dim).child(T.none);
     else body = h_flex().items_start().gap(12).p(14).children(cols.map((c) => v_flex().flex_1().min_w(0).gap(12).children(c)));
-    return v_flex().id("agent-map").track_focus(this.handle).size_full().min_h(0).bg(t.popover).text_color(t.foreground).text_size(12.5)
+    const card = this.card(t, T);
+    return v_flex().id("agent-map").relative().track_focus(this.handle).size_full().min_h(0).bg(t.popover).text_color(t.foreground).text_size(12.5)
       .on_key_down((e, cx) => this.key(e, cx))
       .child(this.header(t, T, n))
       .child(div().id("am-scroll").flex_1().min_h(0).overflow_y_scrollbar().child(body))
       .child(h_flex().h(30).flex_none().px(16).gap(14).items_center().border_t(1).border_color(t.border).text_size(11).text_color(t.dim)
         .children(T.keys.map(([k, v]) => h_flex().gap(5).items_center().child(this.kbd(t, k)).child(v)))
-        .child(div().flex_1()).child("⌘G"));
+        .child(div().flex_1()).child("⌘G"))
+      .when(Boolean(card), (el) => el.child(card));
   }
 
   kbd(t, k) {
@@ -493,13 +554,13 @@ export default class AgentMap extends View {
       .when(on, (el) => el.border_1().border_color(t.accent).bg(t.hover))
       .hover((s) => s.bg(t.hover))
       .on_mouse_down("left", stop).on_click(() => this.go({ go: () => this.goTerm(x) }))
+      .on_hover(this.hoverOn(x.address, [name, tab].filter(Boolean).join(" · ") || x.address, bi))
       .child(this.dot(t, x.status))
       .when(Boolean(name), (el) => el.child(div().flex_none().max_w(200).truncate().font_medium().text_color(t.foreground).child(name)))
       .when(Boolean(tab), (el) => el.child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(name ? t.muted : t.foreground).child(tab)))
       .when(!tab, (el) => el.child(div().flex_1()))
       .when(!x.app, (el) => el.child(div().flex_none().px(4).rounded(4).border_1().border_dashed().border_color(t.border).text_size(10).text_color(t.dim).child(T.shell)))
-      .when(Boolean(age), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(age)))
-      .tooltip(x.address);
+      .when(Boolean(age), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(age)));
     if (!x.bg.length) return line;
     // pills keep their own width: each in a row of its own
     return v_flex().child(line).child(this.fork(t, x.bg.map((k) => h_flex().child(this.pill(t, T, bi, k)))));
@@ -511,9 +572,9 @@ export default class AgentMap extends View {
       .when(on, (el) => el.border_1().border_color(t.accent))
       .hover((s) => s.bg(t.hover))
       .on_mouse_down("left", stop).on_click(() => this.go({ go: () => run("agent.focus", { terminal: k.address }) }))
+      .on_hover(this.hoverOn(k.address, k.name, bi))
       .child(this.dot(t, k.status)).child(k.name)
-      .when(k.alsoTab, (el) => el.child(div().text_color(t.dim).child(`· ${T.alsoTab}`)))
-      .tooltip(k.address);
+      .when(k.alsoTab, (el) => el.child(div().text_color(t.dim).child(`· ${T.alsoTab}`)));
   }
 
   // A space where everything rests: one line, its tabs as pills that go there.
@@ -529,7 +590,7 @@ export default class AgentMap extends View {
         .text_color(old ? t.dim : t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
         .on_mouse_down("left", stop).on_click(() => this.go({ go: () => this.goTerm(x) }))
         .child(this.dot(t, x.status)).child(div().min_w(0).truncate().child(u.tb.name))
-        .tooltip(`${u.tb.name} · ${x.address}`);
+        .on_hover(this.hoverOn(x.address, `${sp.name} · ${u.tb.name}`, bi));
     }));
     return v_flex().child(head).child(h_flex().flex_wrap().gap(4).pt(4).pl(10).children(pills));
   }
@@ -550,7 +611,7 @@ export default class AgentMap extends View {
         .when(on, (el) => el.border_1().border_color(t.accent))
         .hover((s) => s.border_1().border_color(t.foreground))
         .on_mouse_down("left", stop).on_click(() => this.go({ go: () => this.goTerm(c.x) }))
-        .tooltip(tip);
+        .on_hover(this.hoverOn(c.x.address, tip.split(" · ")[0] + (at ? ` · ${T.ago(Math.floor((now - at) / 60000))}` : ""), bi));
     };
     return h_flex().items_start().gap(8).px(12).py(8).when(ruled, (el) => el.border_t(1).border_color(t.border)).text_size(11).text_color(t.dim)
       .child(v_flex().w(64).flex_none()
