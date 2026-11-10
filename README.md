@@ -12,10 +12,11 @@ With a few computers, a few hc sessions each and dozens of spaces, the sidebar s
 
 - **A board per computer.** Machine entries are grouped by host as [Machine Rail](https://github.com/jenthous/herdr-machine-rail) does, with its names, colors and order when it's installed. A computer with two or more hc sessions gets a block per session.
 - **1:1 is one line.** A space whose one tab holds one agent is a single row: space, tab, status. A space with several tabs or terminals branches into them; an agent with sub-agents (terminals it started, `parent` in hc) branches into pills.
-- **Herdr's marks.** Working spins, waiting is a red dot, done is a check, idle an empty ring. Moving agents are outlined in their color; a board with a waiting agent gets a red edge.
-- **Rest folds away.** Idle rows show how long they've rested. After 12 hours an agent alone in its space becomes a small cell under the tree (lighter under a day, darker after three); a space where everything rests becomes one line with its tabs as pills. **Everything** (`a`) unfolds it all; **Shells** (`s`) adds terminals without an agent.
+- **Herdr's marks.** Working spins, waiting is a red dot, done is a check, idle an empty ring. Working and done color their first words; only a waiting agent gets a red box, and a board with one gets a red edge.
+- **You are here.** The terminal you were in when you opened the map has a box and a slowly blinking eye, and never folds away; the arrows start from it.
+- **Rest folds away.** Idle rows show how long they've rested. After 12 hours an agent alone in its space becomes a small cell under the tree (lighter under a day, darker after three); in a space where everything rests, its tabs get dimmer the longer they've rested (newest first). Pills are only for sub-agents. **Everything** (`a`) unfolds it all; **Shells** (`s`) adds terminals without an agent.
 - **Go there.** A click, or ↑↓ / ←→ and Enter, shows that agent (`agent.focus`) or shell and closes the window. Terminal ids appear on hover.
-- **Preview on hover.** Point at any row, pill or cell: a card over another column shows its last screen lines at once.
+- **Preview on hover.** Point at any row, pill or cell: a card right under it shows its last screen lines at once.
 - **Find.** `/` filters by computer, session, space, tab, agent or sub-agent name.
 - **English and Korean.** `EN`/`한` or `l`.
 - **Update check.** "Update Agent Map" in the header when a newer release is out (at most one GitHub request a day; "Stop checking" turns it off).

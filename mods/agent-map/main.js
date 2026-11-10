@@ -21,14 +21,14 @@
 // rested comes from hc (`status_ms` in `hc get`), read once per open.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { hc, exec, theme, props, closeOverlay, shared, setShared, spaces, panes, terminals, run, readTextFile, appHome, settings } from "herdr";
+import { hc, exec, theme, props, closeOverlay, shared, setShared, spaces, panes, terminals, run, readTextFile, appHome, settings, focused } from "herdr";
 import { makeUpdater } from "./update.js";
 import { demo } from "./demo.js";
 
 // "Update Agent Map" in the header when a newer release is out.
 const UPDATER = makeUpdater({
   repo: "jenthous/herdr-app-agent-map",
-  version: "0.1.1",
+  version: "0.1.2",
   key: "agent-map.update",
   mod: "agent-map",
   name: "Agent Map",
@@ -62,6 +62,7 @@ const STR = {
     find: "Find a machine, space, tab or agent",
     none: "Nothing matches",
     loading: "Reading…",
+    here: "you are here",
     legend: "cells: rested 12h+",
     l1: "<1d", l2: "1–3d", l3: "3d+",
     ago: (m) => (m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 1440)}d`),
@@ -87,6 +88,7 @@ const STR = {
     find: "머신·space·탭·에이전트 찾기",
     none: "맞는 것이 없어요",
     loading: "읽는 중…",
+    here: "지금 보는 중",
     legend: "칸 = 12시간 넘게 쉼",
     l1: "~1일", l2: "1~3일", l3: "3일+",
     ago: (m) => (m < 60 ? `${m}분` : m < 1440 ? `${Math.floor(m / 60)}시간` : `${Math.floor(m / 1440)}일`),
@@ -142,7 +144,9 @@ export default class AgentMap extends View {
     this.all = shared("agent-map.all") === true;
     this.shells = shared("agent-map.shells") === true;
     this.query = "";
-    this.sel = null; // key of the selected row
+    // The terminal you were in when the map opened (focus stays under the window).
+    this.hereAddr = focused()?.terminal ?? null;
+    this.sel = this.hereAddr; // key of the selected row: starts there
     this.hover = null; // { addr, label } under the pointer
     this.nav = []; // rows in reading order, rebuilt by render: { key, board, go }
     this.search = InputState.new({});
@@ -154,7 +158,7 @@ export default class AgentMap extends View {
       const own = await readConfig("agent-map");
       this.systemLang = await language(own);
       // the demo starts from the default view, whatever was saved
-      if (own.demo) { this.demo = demo(); this.groups = []; this.all = false; this.shells = false; cx.notify(); return; }
+      if (own.demo) { this.demo = demo(); this.groups = []; this.all = false; this.shells = false; this.hereAddr = this.demo[0].sessions[0].spaces[0].tabs[0].terms[0].address; this.sel = null; cx.notify(); return; }
       this.groups = await this.machines();
       cx.notify();
       this.readSince(cx);
@@ -275,8 +279,18 @@ export default class AgentMap extends View {
   // the last lines on its screen, read on the first hover.
   hoverOn(addr, label, bi) {
     return (h, cx) => {
-      if (h) { this.hover = { addr, label, col: this.colOf?.[bi] ?? 0 }; this.peek(addr, cx); cx.notify(); }
+      if (h) { this.hover = { addr, label }; this.peek(addr, cx); cx.notify(); }
       else if (this.hover?.addr === addr) { this.hover = null; cx.notify(); }
+    };
+  }
+
+  // Where the element under the pointer is (window coordinates), for the card.
+  at(addr) {
+    return (e, cx) => {
+      const b = e.bounds;
+      if (!b || this.hover?.addr !== addr) return;
+      const o = this.hover.b;
+      if (!o || o.x !== b.x || o.y !== b.y) { this.hover.b = { x: b.x, y: b.y, width: b.width, height: b.height }; cx.notify(); }
     };
   }
 
@@ -286,10 +300,14 @@ export default class AgentMap extends View {
     const p = PEEK.get(h.addr);
     const text = p?.text || (p && !p.busy ? "" : T.loading);
     const mono = settings().font_family ?? "JetBrains Mono";
-    // one column wide (1180 - 2×14 padding - 2×12 gaps) / 3, over a column the
-    // pointer is not in: the left one, or the right one when the pointer is there
-    const left = h.col !== 0;
-    return v_flex().absolute().bottom(38).when(left, (el) => el.left(14)).when(!left, (el) => el.right(14)).w(376).p(10).gap(6).rounded(8)
+    // Right under what it describes, its left edge with it; above it when there's
+    // no room below. Until both places are known, nothing is drawn.
+    const b = h.b, r = this.rootB;
+    if (!b || !r) return null;
+    const W = 376, H = 150, x = b.x - r.x, y = b.y - r.y;
+    const left = Math.max(14, Math.min(x, r.width - W - 14));
+    const below = y + b.height + 6 + H < r.height - 34;
+    return v_flex().absolute().left(left).when(below, (el) => el.top(y + b.height + 6)).when(!below, (el) => el.bottom(r.height - y + 6)).w(W).p(10).gap(6).rounded(8)
       .bg(t.raised).border_1().border_color(t.border).shadow_lg()
       .child(h_flex().gap(8).items_center().text_size(11.5)
         .child(div().min_w(0).truncate().font_semibold().child(h.label))
@@ -302,6 +320,8 @@ export default class AgentMap extends View {
 
   since(x) { return x.mins != null ? Date.now() - x.mins * 60000 : SINCE.get(x.address)?.at ?? 0; }
   live(x) { return x.status === "working" || x.status === "blocked" || x.status === "done"; }
+  // The terminal focused under this window: marked, and never folded away.
+  here(x) { return Boolean(this.hereAddr) && x.address === this.hereAddr; }
   resting(x) { const at = this.since(x); return !at || Date.now() - at >= QUIET; }
 
   matches(q, b, s, sp, tb, x) {
@@ -329,11 +349,13 @@ export default class AgentMap extends View {
       else if (typing) this.handle.focus();
       else closeOverlay(props().overlay);
     } else if (k === "up" || k === "down") {
+      this.kb = true;
       const i = Math.max(0, this.nav.findIndex((r) => r.key === this.sel));
       const n = this.nav.length;
       if (n) this.sel = this.nav[this.sel == null ? 0 : (i + (k === "down" ? 1 : -1) + n) % n].key;
     } else if (k === "left" || k === "right") {
       if (typing) return;
+      this.kb = true;
       const cur = this.current();
       const boards = [...new Set(this.nav.map((r) => r.board))];
       const bi = boards.indexOf(cur?.board);
@@ -381,7 +403,8 @@ export default class AgentMap extends View {
     else if (!drawn.length) body = div().p(16).text_color(t.dim).child(T.none);
     else body = h_flex().items_start().gap(12).p(14).children(cols.map((c) => v_flex().flex_1().min_w(0).gap(12).children(c)));
     const card = this.card(t, T);
-    return v_flex().id("agent-map").relative().track_focus(this.handle).size_full().min_h(0).bg(t.popover).text_color(t.foreground).text_size(12.5)
+    return v_flex().id("agent-map").relative().track_focus(this.handle).size_full()
+      .on_mouse_move((e) => { const b = e.bounds; if (b && (!this.rootB || this.rootB.width !== b.width || this.rootB.height !== b.height || this.rootB.x !== b.x || this.rootB.y !== b.y)) this.rootB = { x: b.x, y: b.y, width: b.width, height: b.height }; }).min_h(0).bg(t.popover).text_color(t.foreground).text_size(12.5)
       .on_key_down((e, cx) => this.key(e, cx))
       .child(this.header(t, T, n))
       .child(div().id("am-scroll").flex_1().min_h(0).overflow_y_scrollbar().child(body))
@@ -488,6 +511,7 @@ export default class AgentMap extends View {
   }
 
   sessionPart(t, T, b, s, bi, q, color) {
+    this.lineColor = color;
     const rows = [], quiet = [];
     let weight = 0;
     for (const sp of s.spaces) {
@@ -496,46 +520,76 @@ export default class AgentMap extends View {
       const xs = units.flatMap((u) => u.xs);
       const flat = units.length === 1 && xs.length === 1;
       const x0 = xs[0];
-      if (!this.all && !q && flat && !this.live(x0) && !x0.bg.length && (!x0.app || this.resting(x0))) {
+      if (!this.all && !q && flat && !this.live(x0) && !this.here(x0) && !x0.bg.length && (!x0.app || this.resting(x0))) {
         quiet.push({ sp, tb: units[0].tb, x: x0 });
         continue;
       }
       if (flat) {
-        rows.push(this.limb(t, color, this.leaf(t, T, bi, x0, sp.name, units[0].tb.name !== sp.name ? units[0].tb.name : null)));
+        rows.push({ el: this.leaf(t, T, bi, x0, sp.name, units[0].tb.name !== sp.name ? units[0].tb.name : null), into: 5 });
         weight += 1 + x0.bg.length;
-      } else if (!this.all && !q && !xs.some((x) => this.live(x) || x.bg.length)) {
-        rows.push(this.limb(t, color, this.folded(t, T, bi, sp, units)));
-        weight += 1 + Math.ceil(xs.length / 2);
+      } else if (!this.all && !q && !xs.some((x) => this.live(x) || this.here(x) || x.bg.length)) {
+        rows.push({ el: this.folded(t, T, bi, sp, units), into: 0 });
+        weight += 1 + xs.length;
       } else {
         const head = h_flex().h(24).px(8).gap(6).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
           .child(div().min_w(0).truncate().font_medium().child(sp.name))
           .child(div().flex_none().text_size(11).text_color(t.dim).child(units.length > 1 ? T.tabs(units.length) : T.terms(xs.length)));
-        const kids = units.flatMap((u) => u.xs.map((x) => this.leaf(t, T, bi, x, null, u.tb.name)));
-        rows.push(this.limb(t, color, v_flex().child(head).child(this.fork(t, kids))));
+        const kids = units.flatMap((u) => u.xs.map((x) => ({ el: this.leaf(t, T, bi, x, null, u.tb.name), mid: 12, into: 5 })));
+        rows.push({ el: v_flex().child(head).child(this.fork(t, kids, { x: 10, from: -3 })), into: 0 });
         weight += 1 + xs.length + xs.reduce((a, x) => a + x.bg.length, 0);
       }
     }
     if (!rows.length && !quiet.length) return null;
     const el = v_flex()
-      .when(rows.length > 0, (el) => el.child(v_flex().relative().mt(8).mb(8).ml(16).mr(10).pl(12).gap(3)
-        .child(div().absolute().left(0).top(4).bottom(10).w(2).rounded(1).bg(alpha(color, "88")))
-        .children(rows)))
+      .when(rows.length > 0, (el) => el.child(v_flex().mt(8).mb(8).ml(16).mr(10).pl(12).gap(3)
+        .children(rows.map((r, i) => this.limb(t, color, r.el, i === 0, i === rows.length - 1, r.into)))))
       .when(quiet.length > 0, (el) => el.child(this.cells(t, T, bi, quiet, rows.length > 0)));
     return { el, weight: weight + (quiet.length ? 1.5 : 0) };
   }
 
-  limb(t, color, child) {
-    return div().relative().min_w(0)
-      .child(div().absolute().left(-12).top(12).w(10).h(1).bg(t.border))
-      .child(child);
+  // Tree lines, in the computer's color: the spine 2 px, branches 1 px; a piece of line belongs to the
+  // item it leads to, so a line stops at the last item and turns into it with a
+  // rounded corner (├ … ├ … └) and never runs past it.
+  //   left: where the vertical runs (from the item's left edge, negative)
+  //   top: where it starts (from the item's top; the gap above it is covered)
+  //   mid: the item's vertical middle, where the line turns into it
+  //   into: how far it goes past the item's edge (a row's mark sits 9 px in: the
+  //         line stops 4 px short of it; a box or pill is met at its edge)
+  //   bold: 2 px (the spine from a session to its spaces), else 1 px
+  lines(c, { left, top, mid, last, into = 0, bold = false }) {
+    const k = bold ? 2 : 1, w = -left + into, m = mid - Math.floor(k / 2);
+    if (last) return [
+      div().absolute().left(left).top(top).w(6).h(m - top + k)
+        .when(bold, (el) => el.border_l_2().border_b_2()).when(!bold, (el) => el.border_l_1().border_b_1())
+        .border_color(c).rounded_bl(bold ? 6 : 5),
+      div().absolute().left(left + 6).top(m).w(w - 6).h(k).bg(c),
+    ];
+    return [
+      div().absolute().left(left).top(top).bottom(0).w(k).bg(c),
+      div().absolute().left(left).top(m).w(w).h(k).bg(c),
+    ];
   }
 
-  fork(t, kids) {
-    return v_flex().relative().pl(18).pt(3).gap(3)
-      .children(kids.map((k) => div().relative().min_w(0)
-        .child(div().absolute().left(-12).top(-14).w(10).h(26).border_l_1().border_b_1().border_color(t.border).rounded_bl(5))
-        .child(k)));
+  // A space on the computer's spine (12 px left of the rows, 3 px between them).
+  limb(t, color, child, first, last, into = 5) {
+    // the item first, the lines after: they're drawn over its (invisible) border
+    return div().relative().min_w(0)
+      .child(child)
+      .children(this.lines(alpha(color, "aa"), { left: -12, top: first ? 0 : -3, mid: 12, last, into, bold: true }));
   }
+
+  // Branches under an item: the line drops from under the item's status mark (15 px
+  // in: 8 px padding + half the 14 px slot), from just below the mark, and meets
+  // each kid at its middle. kids: [{ el, mid, into }]. Under a box with no mark (a
+  // space with several tabs) the line starts at the box's bottom, under its text.
+  fork(t, kids, { x = 15, from = -11 } = {}) {
+    const pad = 28, c = alpha(this.lineColor ?? t.border, "66");
+    return v_flex().pl(pad).pt(3).gap(3)
+      .children(kids.map((k, i) => div().relative().min_w(0)
+        .child(k.el)
+        .children(this.lines(c, { left: x - pad, top: i === 0 ? from : -3, mid: k.mid, last: i === kids.length - 1, into: k.into ?? 0 }))));
+  }
+
 
   row(key, bi, go) {
     this.nav.push({ key, board: bi, go });
@@ -543,57 +597,63 @@ export default class AgentMap extends View {
   }
 
   // One terminal: a line (with its name and tab), then its sub-agents as pills.
-  leaf(t, T, bi, x, name, tab) {
+  leaf(t, T, bi, x, name, tab, step = null) {
     const on = this.row(x.address, bi, () => this.goTerm(x));
     const sc = this.statusColor(t, x.status);
     const at = this.since(x);
     const age = x.app && !this.live(x) && at ? T.ago(Math.floor((Date.now() - at) / 60000)) : null;
+    // Only a waiting agent (red: it needs you) and the one you're in (accent) get a
+    // box; working and done say so by
+    // their mark and the color of their first words; resting ones by brightness.
+    const blocked = x.status === "blocked" || x.status === "error";
+    const fade = step == null ? null : [t.foreground, t.muted, t.dim, alpha(t.dim, "99")][step];
+    const lead = x.status === "working" ? t.working : x.status === "done" ? t.done : fade ?? t.foreground;
     const line = h_flex().id(`am-${x.address}`).h(24).px(8).gap(6).items_center().rounded(6).min_w(0).cursor_pointer()
-      .when(Boolean(sc), (el) => el.border_1().border_color(alpha(sc, "77")).bg(x.status === "blocked" ? alpha(sc, "1a") : t.raised))
-      .when(!sc, (el) => el.text_color(t.muted))
-      .when(on, (el) => el.border_1().border_color(t.accent).bg(t.hover))
+      .border_1().border_color(blocked ? alpha(t.blocked, "88") : this.here(x) ? alpha(t.accent, "aa") : t.background)
+      .when(blocked, (el) => el.bg(alpha(t.blocked, "1a")))
+      .when(!sc, (el) => el.text_color(fade ?? t.muted))
+      // the keyboard's place, once the arrows are used
+      .when(on && this.kb, (el) => el.border_color(t.accent).bg(t.hover))
       .hover((s) => s.bg(t.hover))
       .on_mouse_down("left", stop).on_click(() => this.go({ go: () => this.goTerm(x) }))
-      .on_hover(this.hoverOn(x.address, [name, tab].filter(Boolean).join(" · ") || x.address, bi))
+      .on_mouse_move(this.at(x.address)).on_hover(this.hoverOn(x.address, [name, tab].filter(Boolean).join(" · ") || x.address, bi))
       .child(this.dot(t, x.status))
-      .when(Boolean(name), (el) => el.child(div().flex_none().max_w(200).truncate().font_medium().text_color(t.foreground).child(name)))
-      .when(Boolean(tab), (el) => el.child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(name ? t.muted : t.foreground).child(tab)))
+      .when(Boolean(name), (el) => el.child(div().flex_none().max_w(200).truncate().font_medium().text_color(lead).child(name)))
+      .when(Boolean(tab), (el) => el.child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(name ? t.muted : lead).child(tab)))
       .when(!tab, (el) => el.child(div().flex_1()))
       .when(!x.app, (el) => el.child(div().flex_none().px(4).rounded(4).border_1().border_dashed().border_color(t.border).text_size(10).text_color(t.dim).child(T.shell)))
-      .when(Boolean(age), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(age)));
+      // where you are: an eye that slowly blinks (no words)
+      .when(this.here(x), (el) => el.child(svg("mods/agent-map/icons/eye.svg").size(13).flex_none().text_color(t.accent)
+        .loop("opacity", { from: 1, to: 0.2, period: 1600 })))
+      .when(Boolean(age) && !this.here(x), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(age)));
     if (!x.bg.length) return line;
     // pills keep their own width: each in a row of its own
-    return v_flex().child(line).child(this.fork(t, x.bg.map((k) => h_flex().child(this.pill(t, T, bi, k)))));
+    return v_flex().child(line).child(this.fork(t, x.bg.map((k) => ({ el: h_flex().child(this.pill(t, T, bi, k)), mid: 11 }))));
   }
 
   pill(t, T, bi, k) {
     const on = this.row(k.address, bi, () => run("agent.focus", { terminal: k.address }));
-    return h_flex().id(`am-${k.address}`).h(21).px(7).gap(5).items_center().rounded(11).bg(t.raised).text_size(11).cursor_pointer()
-      .when(on, (el) => el.border_1().border_color(t.accent))
+    return h_flex().id(`am-${k.address}`).h(22).px(7).gap(5).items_center().rounded(11).bg(t.raised).text_size(11).cursor_pointer()
+      .when(on && this.kb, (el) => el.border_1().border_color(t.accent))
       .hover((s) => s.bg(t.hover))
       .on_mouse_down("left", stop).on_click(() => this.go({ go: () => run("agent.focus", { terminal: k.address }) }))
-      .on_hover(this.hoverOn(k.address, k.name, bi))
+      .on_mouse_move(this.at(k.address)).on_hover(this.hoverOn(k.address, k.name, bi))
       .child(this.dot(t, k.status)).child(k.name)
       .when(k.alsoTab, (el) => el.child(div().text_color(t.dim).child(`· ${T.alsoTab}`)));
   }
 
-  // A space where everything rests: one line, its tabs as pills that go there.
+  // A space where everything rests: its head says so, its tabs are rows newest first,
+  // dimmer in four steps (under 12 h, under a day, 1–3 days, older or unknown).
   folded(t, T, bi, sp, units) {
     const head = h_flex().h(24).px(8).gap(6).items_center().rounded(6).border_1().border_dashed().border_color(t.border).text_color(t.muted)
       .child(div().min_w(0).truncate().font_medium().text_color(t.foreground).child(sp.name))
       .child(div().flex_none().text_size(11).text_color(t.dim).child(`${units.length > 1 ? T.tabs(units.length) : T.terms(units[0].xs.length)} ${T.resting}`));
-    const pills = units.flatMap((u) => u.xs.map((x) => {
-      const on = this.row(x.address, bi, () => this.goTerm(x));
-      const old = !x.app || this.resting(x);
-      return h_flex().id(`am-${x.address}`).max_w(180).h(20).px(7).gap(5).items_center().rounded(10).text_size(10.5).cursor_pointer()
-        .bg(old ? t.background : t.raised).border_1().border_color(on ? t.accent : old ? t.border : t.raised)
-        .text_color(old ? t.dim : t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
-        .on_mouse_down("left", stop).on_click(() => this.go({ go: () => this.goTerm(x) }))
-        .child(this.dot(t, x.status)).child(div().min_w(0).truncate().child(u.tb.name))
-        .on_hover(this.hoverOn(x.address, `${sp.name} · ${u.tb.name}`, bi));
-    }));
-    return v_flex().child(head).child(h_flex().flex_wrap().gap(4).pt(4).pl(10).children(pills));
+    const now = Date.now();
+    const step = (at) => (!at ? 3 : now - at < QUIET ? 0 : now - at < DAY ? 1 : now - at < 3 * DAY ? 2 : 3);
+    const items = units.flatMap((u) => u.xs.map((x) => ({ u, x, at: x.app ? this.since(x) : 0 }))).sort((a, b) => b.at - a.at);
+    return v_flex().child(head).child(this.fork(t, items.map(({ u, x, at }) => ({ el: this.leaf(t, T, bi, x, null, u.tb.name, step(at)), mid: 12, into: 5 })), { x: 10, from: -3 }));
   }
+
 
   // Rested 12 h+ and alone in its space: a cell each, newest first; shells apart.
   cells(t, T, bi, quiet, ruled) {
@@ -608,10 +668,10 @@ export default class AgentMap extends View {
       return div().id(`am-${c.x.address}`).size(12).rounded(3).cursor_pointer()
         .when(kind === "shell", (el) => el.border_1().border_dashed().border_color(t.border))
         .when(kind !== "shell", (el) => el.bg(this.cellColor(t, kind)).when(kind === "old", (e2) => e2.border_1().border_color(t.border)))
-        .when(on, (el) => el.border_1().border_color(t.accent))
+        .when(on && this.kb, (el) => el.border_1().border_color(t.accent))
         .hover((s) => s.border_1().border_color(t.foreground))
         .on_mouse_down("left", stop).on_click(() => this.go({ go: () => this.goTerm(c.x) }))
-        .on_hover(this.hoverOn(c.x.address, tip.split(" · ")[0] + (at ? ` · ${T.ago(Math.floor((now - at) / 60000))}` : ""), bi));
+        .on_mouse_move(this.at(c.x.address)).on_hover(this.hoverOn(c.x.address, tip.split(" · ")[0] + (at ? ` · ${T.ago(Math.floor((now - at) / 60000))}` : ""), bi));
     };
     return h_flex().items_start().gap(8).px(12).py(8).when(ruled, (el) => el.border_t(1).border_color(t.border)).text_size(11).text_color(t.dim)
       .child(v_flex().w(64).flex_none()
