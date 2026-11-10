@@ -1,0 +1,4 @@
+mods/agent-map/config.json
+mods/agent-map/gpui-kit.d.ts
+mods/agent-map/jsconfig.json
+.DS_Store
