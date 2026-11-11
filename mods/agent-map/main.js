@@ -28,7 +28,7 @@ import { demo } from "./demo.js";
 // "Update Agent Map" in the header when a newer release is out.
 const UPDATER = makeUpdater({
   repo: "jenthous/herdr-app-agent-map",
-  version: "0.1.5",
+  version: "0.1.6",
   key: "agent-map.update",
   mod: "agent-map",
   name: "Agent Map",
@@ -279,19 +279,21 @@ export default class AgentMap extends View {
 
   // Hovering shows a card at once (a tooltip waits half a second): what it is and
   // the last lines on its screen, read on the first hover.
-  hoverOn(addr, label, bi) {
+  // `key` tells apart two drawings of one terminal (a sub-agent's pill and its own
+  // tab's row): each needs its own element ids and place, or their hovers fight.
+  hoverOn(addr, label, bi, key = addr) {
     return (h, cx) => {
       if (h) {
-        if (this.away === addr) return;
+        if (this.away === key) return;
         this.away = null;
         this.kb = false; // the pointer took over: no keyboard card left behind when it goes
-        this.hover = { addr, label };
+        this.hover = { addr, label, key };
         this.peek(addr, cx);
         cx.notify();
       }
       else {
-        if (this.away === addr) this.away = null; // left it: pointing at it again shows the card again
-        if (this.hover?.addr === addr) { this.hover = null; cx.notify(); }
+        if (this.away === key) this.away = null; // left it: pointing at it again shows the card again
+        if (this.hover?.key === key) { this.hover = null; cx.notify(); }
       }
     };
   }
@@ -302,16 +304,19 @@ export default class AgentMap extends View {
   // The card for the arrow keys hangs under the selected item (a Popup measures
   // it). The pointer's card is drawn by the window itself (pointerCard), at a place
   // worked out before it's drawn, so it never shows up somewhere first and moves.
-  pop(t, T, addr, label, el, bi, under = false) {
-    const keyboard = !this.hover && this.kb && addr === this.sel && addr !== this.away;
-    return Popup.new(`am-pop-${addr}`, el
+  pop(t, T, addr, label, el, bi, under = false, key = addr) {
+    const keyboard = !this.hover && this.kb && key === this.sel && key !== this.away;
+    return Popup.new(`am-pop-${key}`, el
       .on_mouse_move((e, cx) => {
-        const b = e.bounds;
+        const b = e.bounds, q = e.position;
         if (!b) return;
-        const o = (this.boxes ??= {})[addr];
+        // moves reach every element: only the one under the pointer says where it is
+        // (the same terminal can be drawn twice, as a pill and as a row)
+        if (q && (q.x < b.x || q.y < b.y || q.x > b.x + b.width || q.y > b.y + b.height)) return;
+        const o = (this.boxes ??= {})[key];
         if (o && o.x === b.x && o.y === b.y && o.width === b.width) return;
-        this.boxes[addr] = { x: b.x, y: b.y, width: b.width, height: b.height, bi, under };
-        if (this.hover?.addr === addr) cx.notify();
+        this.boxes[key] = { x: b.x, y: b.y, width: b.width, height: b.height, bi, under };
+        if (this.hover?.key === key) cx.notify();
       }))
       .anchor("top_left")
       .when(keyboard, (p) => p.content(div().pt(4).child(this.cardBody(t, T, addr, label))));
@@ -322,7 +327,7 @@ export default class AgentMap extends View {
   // through stays clear; under it for cells (you move across those). Nothing is
   // drawn until the item's and the window's places are known.
   pointerCard(t, T) {
-    const h = this.hover, b = h && this.boxes?.[h.addr], r = this.rootB;
+    const h = this.hover, b = h && this.boxes?.[h.key], r = this.rootB;
     if (!b || !r) return null;
     const W = 376, H = 170;
     let x, y;
@@ -334,9 +339,18 @@ export default class AgentMap extends View {
     }
     x = Math.max(8, Math.min(x, r.width - W - 8));
     y = Math.max(52, Math.min(y, r.height - 34 - H));
+    // never over the item itself: the card would take the pointer, go away, give it
+    // back, and blink. Try the other side, then under it.
+    const bx = b.x - r.x, by = b.y - r.y;
+    const over = (cx0, cy0) => cx0 < bx + b.width && cx0 + W > bx && cy0 < by + b.height && cy0 + H > by;
+    if (over(x, y)) {
+      const other = x > bx ? bx - W - 12 : bx + b.width + 12;
+      if (other >= 8 && other <= r.width - W - 8 && !over(other, y)) x = other;
+      else { x = Math.max(8, Math.min(bx, r.width - W - 8)); y = by + b.height + 4; }
+    }
     return div().id("am-pointer-card").absolute().left(x).top(y)
       // a card can't let the pointer through: reaching it puts it away
-      .on_hover((on, cx) => { if (on) { this.away = h.addr; this.hover = null; cx.notify(); } })
+      .on_hover((on, cx) => { if (on) { this.away = h.key; this.hover = null; cx.notify(); } })
       .child(this.cardBody(t, T, h.addr, h.label));
   }
 
@@ -411,7 +425,7 @@ export default class AgentMap extends View {
       const n = this.nav.length;
       if (n) this.sel = this.nav[this.sel == null ? 0 : (i + (k === "down" ? 1 : -1) + n) % n].key;
       this.hover = null; this.away = null;
-      if (this.sel) this.peek(this.sel, cx);
+      if (this.sel) this.peek(this.sel.split("#")[0], cx);
     } else if (k === "left" || k === "right") {
       if (typing) return;
       this.kb = true;
@@ -421,7 +435,7 @@ export default class AgentMap extends View {
       const next = boards[(bi + (k === "right" ? 1 : -1) + boards.length) % boards.length];
       this.sel = this.nav.find((r) => r.board === next)?.key ?? this.sel;
       this.hover = null; this.away = null;
-      if (this.sel) this.peek(this.sel, cx);
+      if (this.sel) this.peek(this.sel.split("#")[0], cx);
     } else if (k === "enter") {
       if (typing) return;
       this.go(this.current());
@@ -524,7 +538,7 @@ export default class AgentMap extends View {
     if (!this.groups) body = div().p(16).text_color(t.dim).child(T.loading);
     else if (!drawn.length) body = div().p(16).text_color(t.dim).child(T.none);
     else body = h_flex().items_start().gap(12).p(14).children(cols.map((c, ci) => v_flex().flex_1().min_w(0).gap(12).children(c).child(this.tail(t, ci))));
-    this.shown = this.hover?.addr ?? (this.kb && this.sel !== this.away ? this.sel : null);
+    this.shown = this.hover?.addr ?? (this.kb && this.sel !== this.away ? this.sel?.split("#")[0] ?? null : null);
     return v_flex().id("agent-map").relative().track_focus(this.handle).size_full()
       .on_mouse_up("left", (_e, cx) => this.drop(cx))
       .on_mouse_move((e) => { const b = e.bounds; if (b) this.rootB = { x: b.x, y: b.y, width: b.width, height: b.height }; })
@@ -768,14 +782,15 @@ export default class AgentMap extends View {
   }
 
   pill(t, T, bi, k) {
-    const on = this.row(k.address, bi, () => run("agent.focus", { terminal: k.address }));
-    return this.pop(t, T, k.address, k.name, h_flex().id(`am-${k.address}`).h(22).px(7).gap(5).items_center().rounded(11).bg(t.raised).text_size(11).cursor_pointer()
+    const key = `${k.address}#bg`;
+    const on = this.row(key, bi, () => run("agent.focus", { terminal: k.address }));
+    return this.pop(t, T, k.address, k.name, h_flex().id(`am-${key}`).h(22).px(7).gap(5).items_center().rounded(11).bg(t.raised).text_size(11).cursor_pointer()
       .when(on && this.kb, (el) => el.border_1().border_color(t.accent))
       .hover((s) => s.bg(t.hover))
       .on_mouse_down("left", stop).on_click(() => this.go({ go: () => run("agent.focus", { terminal: k.address }) }))
-      .on_hover(this.hoverOn(k.address, k.name, bi))
+      .on_hover(this.hoverOn(k.address, k.name, bi, key))
       .child(this.dot(t, k.status)).child(k.name)
-      .when(k.alsoTab, (el) => el.child(div().text_color(t.dim).child(`· ${T.alsoTab}`))), bi);
+      .when(k.alsoTab, (el) => el.child(div().text_color(t.dim).child(`· ${T.alsoTab}`))), bi, false, key);
   }
 
   // A space where everything rests: its head says so, its tabs are rows newest first,

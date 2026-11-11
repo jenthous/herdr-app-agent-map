@@ -2,6 +2,11 @@
 
 The update window in the app shows the release notes of the newest release; they are written from this file.
 
+## v0.1.6
+
+- **No more blinking on sub-agents:** pointing at a sub-agent that also has a tab of its own (`· tab`, e.g. one started with `hc run --bg` and then kept) made its preview card blink, because its pill and its row shared one identity. They are now told apart.
+- **The card never covers what you point at:** if it would, it goes to the other side, or under the item.
+
 ## v0.1.5
 
 - **Agent icons:** each agent row starts with its agent's icon from Herdr (the same as the sidebar's), with its status mark at the end of the row, like the sidebar's agent list. The icon keeps its colors while the agent works, waits, is done or has rested under 6 hours; after that it turns gray, darker the longer it rests (6–12 h, under a day, 1–3 days, older).
