@@ -2,6 +2,11 @@
 
 The update window in the app shows the release notes of the newest release; they are written from this file.
 
+## v0.1.7
+
+- **Background terminals:** terminals running with no tab and no parent in one (`hc run --bg --no-parent`, a script started outside Herdr) were nowhere on the map. Each session now has a "background" group of them, with how long each has been running; click one to peek at it (keep it as a tab from there).
+- **How long sub-agents have run:** a working sub-agent's pill shows how long it has been at it (a waiting one, how long it has waited), like the rows.
+
 ## v0.1.6
 
 - **No more blinking on sub-agents:** pointing at a sub-agent that also has a tab of its own (`· tab`, e.g. one started with `hc run --bg` and then kept) made its preview card blink, because its pill and its row shared one identity. They are now told apart.

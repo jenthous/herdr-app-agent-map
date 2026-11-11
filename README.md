@@ -15,7 +15,8 @@ With a few computers, a few hc sessions each and dozens of spaces, the sidebar s
 - **Agent icons.** Each agent row starts with its agent's icon from Herdr and ends with its status mark, like the sidebar's agent list. Icons keep their colors while the agent is active or has rested under 6 hours, then turn a darker gray the longer it rests.
 - **Herdr's marks.** Working spins, waiting is a red dot, done is a check, idle an empty ring. Working and done color their first words; only a waiting agent gets a red box, and a board with one gets a red edge.
 - **You are here.** The terminal you were in when you opened the map has a box and a slowly blinking eye, and never folds away; the arrows start from it.
-- **How long.** A working agent shows how long it has been at it, a waiting one how long it has waited (red).
+- **How long.** A working agent or sub-agent shows how long it has been at it, a waiting one how long it has waited (red).
+- **Background.** Terminals running with no tab and no parent in one (`hc run --bg --no-parent`, a script started outside Herdr) get a group of their own in their session, with how long they've run; a click peeks at one.
 - **Rest folds away.** Idle rows show how long they've rested. After 12 hours an agent alone in its space becomes a small cell under the tree (lighter under a day, darker after three); in a space where everything rests, its tabs get dimmer the longer they've rested (newest first). Pills are only for sub-agents. **Everything** (`a`) unfolds it all; **Shells** (`s`) adds terminals without an agent.
 - **Go there.** A click, or ↑↓ / ←→ and Enter, shows that agent (`agent.focus`) or shell and closes the window. Terminal ids appear on hover.
 - **Preview on hover.** Point at any row, pill or cell: a card beside it shows its last screen lines at once (under the selection when you use the arrows).

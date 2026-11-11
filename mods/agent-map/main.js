@@ -28,7 +28,7 @@ import { demo } from "./demo.js";
 // "Update Agent Map" in the header when a newer release is out.
 const UPDATER = makeUpdater({
   repo: "jenthous/herdr-app-agent-map",
-  version: "0.1.6",
+  version: "0.1.7",
   key: "agent-map.update",
   mod: "agent-map",
   name: "Agent Map",
@@ -51,6 +51,7 @@ const STR = {
     session: "session",
     defaultSession: "default",
     tabs: (n) => `${n} tabs`,
+    loose: "in the background",
     terms: (n) => `${n} terminals`,
     resting: "resting",
     quiet: (n) => `12h+ ${n}`,
@@ -78,6 +79,7 @@ const STR = {
     session: "세션",
     defaultSession: "기본",
     tabs: (n) => `${n} 탭`,
+    loose: "백그라운드",
     terms: (n) => `${n} 터미널`,
     resting: "쉬는 중",
     quiet: (n) => `12시간+ ${n}`,
@@ -203,11 +205,13 @@ export default class AgentMap extends View {
   // Ask hc when each resting agent's status last changed (once per status change).
   readSince(cx) {
     if (this.demo) return;
-    const want = [];
-    for (const p of panes()) {
-      if (!p.terminal || !p.status) continue;
-      const known = SINCE.get(p.terminal);
-      if (!known || known.status !== p.status) want.push(p.terminal);
+    const want = [], now = new Map();
+    for (const p of panes()) if (p.terminal && p.status) now.set(p.terminal, p.status);
+    // sub-agents too: their pills say how long they've been at it
+    for (const k of terminals()) if (k.parent && k.state === "live" && k.status && !now.has(k.address)) now.set(k.address, k.status);
+    for (const [a, st] of now) {
+      const known = SINCE.get(a);
+      if (!known || known.status !== st) want.push(a);
     }
     if (!want.length || this.reading) return;
     this.reading = true;
@@ -218,7 +222,7 @@ export default class AgentMap extends View {
           try {
             const r = await hc(["get", a, "--json"]);
             const j = JSON.parse(r.stdout);
-            SINCE.set(a, { status: panes().find((p) => p.terminal === a)?.status ?? null, at: j.status_ms ?? 0 });
+            SINCE.set(a, { status: now.get(a) ?? null, at: j.status_ms ?? 0 });
           } catch { SINCE.set(a, { status: null, at: 0 }); }
         }
       };
@@ -250,7 +254,7 @@ export default class AgentMap extends View {
       if (!where) continue;
       const box = out.get(where.g.key);
       const sname = where.session ?? "";
-      if (!box.sessions.has(sname)) box.sessions.set(sname, { name: sname, spaces: [] });
+      if (!box.sessions.has(sname)) box.sessions.set(sname, { name: sname, spaces: [], loose: [] });
       const tabs = sp.tabs.map((tb) => ({
         id: tb.id, name: tb.name,
         terms: ps.filter((p) => p.tab === tb.id && p.terminal).map((p) => ({
@@ -260,6 +264,21 @@ export default class AgentMap extends View {
         })),
       }));
       box.sessions.get(sname).spaces.push({ id: sp.id, name: sp.name, tabs });
+    }
+    // Running with no tab and no parent shown anywhere (`hc run --bg --no-parent`, a
+    // script started from outside Herdr): nowhere else to see them, so a group of
+    // their own in their session.
+    const shownParent = (k) => k.parent && inPane.has(k.parent) && byAddr.get(k.parent)?.state === "live";
+    for (const k of all) {
+      if (k.state !== "live" || inPane.has(k.address) || shownParent(k)) continue;
+      const where = entryOf.get(k.address.includes("/") ? k.address.split("/")[0] : null);
+      if (!where) continue;
+      const box = out.get(where.g.key), sname = where.session ?? "";
+      if (!box.sessions.has(sname)) box.sessions.set(sname, { name: sname, spaces: [], loose: [] });
+      box.sessions.get(sname).loose.push({
+        address: k.address, name: k.name || k.program?.name || k.address.split("/").pop(), status: k.status || "bg",
+        alsoTab: false, loose: true, since: k.created_ms ?? null,
+      });
     }
     return [...out.values()].map((b) => ({ ...b, sessions: [...b.sessions.values()] }));
   }
@@ -605,6 +624,8 @@ export default class AgentMap extends View {
     if (s === "blocked" || s === "error") return slot.child(div().size(7).rounded(4).bg(t.blocked));
     if (s === "done") return slot.child(svg("mods/agent-map/icons/check.svg").size(size - 2).text_color(t.done));
     if (s === "shell") return slot.child(div().size(7).rounded(2).border_1().border_color(t.border));
+    // running, but its program reports no status
+    if (s === "bg") return slot.child(div().size(6).rounded(3).bg(t.muted));
     return slot.child(div().size(7).rounded(4).border(1.5).border_color(t.idle ?? t.dim));
   }
 
@@ -623,7 +644,7 @@ export default class AgentMap extends View {
   board(t, T, b, bi, q) {
     const terms = (s) => s.spaces.flatMap((sp) => sp.tabs.flatMap((tb) => tb.terms));
     const mine = b.sessions.flatMap(terms).filter((x) => this.shells || x.app);
-    if (!mine.length) return null;
+    if (!mine.length && !b.sessions.some((s) => s.loose?.length)) return null;
     const color = b.color ?? t.dim;
     const multi = b.sessions.length > 1;
     const parts = [];
@@ -681,6 +702,14 @@ export default class AgentMap extends View {
         rows.push({ el: v_flex().child(head).child(this.fork(t, kids, { x: 10, from: -3 })), into: 0 });
         weight += 1 + xs.length + xs.reduce((a, x) => a + x.bg.length, 0);
       }
+    }
+    const loose = (s.loose ?? []).filter((k) => !q || [b.label, s.name, k.name, k.address].some((v) => lower(v).includes(q)));
+    if (loose.length) {
+      const head = h_flex().h(24).px(8).gap(6).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
+        .child(div().font_medium().text_color(t.muted).child(T.loose))
+        .child(div().flex_none().text_size(11).text_color(t.dim).child(String(loose.length)));
+      rows.push({ el: v_flex().child(head).child(this.fork(t, loose.map((k) => ({ el: h_flex().child(this.pill(t, T, bi, k)), mid: 11 })), { x: 10, from: -3 })), into: 0 });
+      weight += 1 + loose.length;
     }
     if (!rows.length && !quiet.length) return null;
     const el = v_flex()
@@ -783,14 +812,20 @@ export default class AgentMap extends View {
 
   pill(t, T, bi, k) {
     const key = `${k.address}#bg`;
-    const on = this.row(key, bi, () => run("agent.focus", { terminal: k.address }));
+    // one with no tab: a peek over the current tab (with keep-as-tab there)
+    const show = () => run(k.loose ? "terminal.peek" : "agent.focus", { terminal: k.address });
+    const on = this.row(key, bi, show);
     return this.pop(t, T, k.address, k.name, h_flex().id(`am-${key}`).h(22).px(7).gap(5).items_center().rounded(11).bg(t.raised).text_size(11).cursor_pointer()
       .when(on && this.kb, (el) => el.border_1().border_color(t.accent))
       .hover((s) => s.bg(t.hover))
-      .on_mouse_down("left", stop).on_click(() => this.go({ go: () => run("agent.focus", { terminal: k.address }) }))
+      .on_mouse_down("left", stop).on_click(() => this.go({ go: show }))
       .on_hover(this.hoverOn(k.address, k.name, bi, key))
       .child(this.dot(t, k.status)).child(k.name)
-      .when(k.alsoTab, (el) => el.child(div().text_color(t.dim).child(`· ${T.alsoTab}`))), bi, false, key);
+      .when(k.alsoTab, (el) => el.child(div().text_color(t.dim).child(`· ${T.alsoTab}`)))
+      .when(Boolean(k.loose && k.since), (el) => el.child(div().text_color(t.dim).child(T.ran(Math.floor((Date.now() - k.since) / 60000)))))
+      // working / waiting: for how long, like the rows
+      .when(!k.loose && (k.status === "working" || k.status === "blocked") && Boolean(SINCE.get(k.address)?.at), (el) =>
+        el.child(div().text_color(k.status === "working" ? t.working : t.blocked).child(T.ran(Math.floor((Date.now() - SINCE.get(k.address).at) / 60000))))), bi, false, key);
   }
 
   // A space where everything rests: its head says so, its tabs are rows newest first,
