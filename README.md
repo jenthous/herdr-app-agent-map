@@ -14,6 +14,7 @@ With a few computers, a few hc sessions each and dozens of spaces, the sidebar s
 - **1:1 is one line.** A space whose one tab holds one agent is a single row: space, tab, status. A space with several tabs or terminals branches into them; an agent with sub-agents (terminals it started, `parent` in hc) branches into pills.
 - **Herdr's marks.** Working spins, waiting is a red dot, done is a check, idle an empty ring. Working and done color their first words; only a waiting agent gets a red box, and a board with one gets a red edge.
 - **You are here.** The terminal you were in when you opened the map has a box and a slowly blinking eye, and never folds away; the arrows start from it.
+- **How long.** A working agent shows how long it has been at it, a waiting one how long it has waited (red).
 - **Rest folds away.** Idle rows show how long they've rested. After 12 hours an agent alone in its space becomes a small cell under the tree (lighter under a day, darker after three); in a space where everything rests, its tabs get dimmer the longer they've rested (newest first). Pills are only for sub-agents. **Everything** (`a`) unfolds it all; **Shells** (`s`) adds terminals without an agent.
 - **Go there.** A click, or ↑↓ / ←→ and Enter, shows that agent (`agent.focus`) or shell and closes the window. Terminal ids appear on hover.
 - **Preview on hover.** Point at any row, pill or cell: a card beside it shows its last screen lines at once (under the selection when you use the arrows).

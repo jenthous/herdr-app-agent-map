@@ -2,6 +2,10 @@
 
 The update window in the app shows the release notes of the newest release; they are written from this file.
 
+## v0.1.4
+
+- **How long it's been running:** a working agent shows how long it has been at it (`<1m`, `36m`, `1h 12m`), in the working color; an agent waiting on you shows how long it has waited, in red. Resting ones still show how long they've rested.
+
 ## v0.1.3
 
 - **Boards stay put:** a computer keeps the column it was given instead of moving when agents start and stop. Drag a board by its head to move it; `=` lays them all out again.

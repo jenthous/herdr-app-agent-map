@@ -28,7 +28,7 @@ import { demo } from "./demo.js";
 // "Update Agent Map" in the header when a newer release is out.
 const UPDATER = makeUpdater({
   repo: "jenthous/herdr-app-agent-map",
-  version: "0.1.3",
+  version: "0.1.4",
   key: "agent-map.update",
   mod: "agent-map",
   name: "Agent Map",
@@ -65,6 +65,7 @@ const STR = {
     here: "you are here",
     legend: "cells: rested 12h+",
     l1: "<1d", l2: "1–3d", l3: "3d+",
+    ran: (m) => (m < 1 ? "<1m" : m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`),
     ago: (m) => (m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 1440)}d`),
     switchLang: "한",
     keys: [["↑↓", "move"], ["←→", "board"], ["⏎", "go"], ["/", "find"], ["a", "everything"], ["s", "shells"], ["l", "한국어"], ["=", "re-place"], ["esc", "close"]],
@@ -91,6 +92,7 @@ const STR = {
     here: "지금 보는 중",
     legend: "칸 = 12시간 넘게 쉼",
     l1: "~1일", l2: "1~3일", l3: "3일+",
+    ran: (m) => (m < 1 ? "1분 미만" : m < 60 ? `${m}분` : m < 1440 ? `${Math.floor(m / 60)}시간 ${m % 60}분` : `${Math.floor(m / 1440)}일 ${Math.floor((m % 1440) / 60)}시간`),
     ago: (m) => (m < 60 ? `${m}분` : m < 1440 ? `${Math.floor(m / 60)}시간` : `${Math.floor(m / 1440)}일`),
     switchLang: "EN",
     keys: [["↑↓", "이동"], ["←→", "보드"], ["⏎", "가기"], ["/", "찾기"], ["a", "전체"], ["s", "셸"], ["l", "English"], ["=", "다시 배치"], ["esc", "닫기"]],
@@ -698,6 +700,8 @@ export default class AgentMap extends View {
     const sc = this.statusColor(t, x.status);
     const at = this.since(x);
     const age = x.app && !this.live(x) && at ? T.ago(Math.floor((Date.now() - at) / 60000)) : null;
+    // working: how long it has been at it; waiting on you: how long it has waited
+    const runFor = x.app && at && (x.status === "working" || x.status === "blocked") ? T.ran(Math.floor((Date.now() - at) / 60000)) : null;
     // Only a waiting agent (red: it needs you) and the one you're in (accent) get a
     // box; working and done say so by
     // their mark and the color of their first words; resting ones by brightness.
@@ -719,6 +723,7 @@ export default class AgentMap extends View {
       .when(!tab, (el) => el.child(div().flex_1()))
       .when(!x.app, (el) => el.child(div().flex_none().px(4).rounded(4).border_1().border_dashed().border_color(t.border).text_size(10).text_color(t.dim).child(T.shell)))
       // where you are: an eye that slowly blinks (no words)
+      .when(Boolean(runFor), (el) => el.child(div().flex_none().text_size(10.5).text_color(x.status === "working" ? t.working : t.blocked).child(runFor)))
       .when(this.here(x), (el) => el.child(svg("mods/agent-map/icons/eye.svg").size(13).flex_none().text_color(t.accent)
         .loop("opacity", { from: 1, to: 0.2, period: 1600 })))
       .when(Boolean(age) && !this.here(x), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(age)));
