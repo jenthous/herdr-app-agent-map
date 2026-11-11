@@ -2,6 +2,11 @@
 
 The update window in the app shows the release notes of the newest release; they are written from this file.
 
+## v0.1.5
+
+- **Agent icons:** each agent row starts with its agent's icon from Herdr (the same as the sidebar's), with its status mark at the end of the row, like the sidebar's agent list. The icon keeps its colors while the agent works, waits, is done or has rested under 6 hours; after that it turns gray, darker the longer it rests (6–12 h, under a day, 1–3 days, older).
+- **Icons in the cells too:** agents resting 12 hours or more show as their icon in the same grays instead of squares, and the legend matches.
+
 ## v0.1.4
 
 - **How long it's been running:** a working agent shows how long it has been at it (`<1m`, `36m`, `1h 12m`), in the working color; an agent waiting on you shows how long it has waited, in red. Resting ones still show how long they've rested.

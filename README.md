@@ -12,6 +12,7 @@ With a few computers, a few hc sessions each and dozens of spaces, the sidebar s
 
 - **A board per computer.** Machine entries are grouped by host as [Machine Rail](https://github.com/jenthous/herdr-machine-rail) does, with its names, colors and order when it's installed. A computer with two or more hc sessions gets a block per session.
 - **1:1 is one line.** A space whose one tab holds one agent is a single row: space, tab, status. A space with several tabs or terminals branches into them; an agent with sub-agents (terminals it started, `parent` in hc) branches into pills.
+- **Agent icons.** Each agent row starts with its agent's icon from Herdr and ends with its status mark, like the sidebar's agent list. Icons keep their colors while the agent is active or has rested under 6 hours, then turn a darker gray the longer it rests.
 - **Herdr's marks.** Working spins, waiting is a red dot, done is a check, idle an empty ring. Working and done color their first words; only a waiting agent gets a red box, and a board with one gets a red edge.
 - **You are here.** The terminal you were in when you opened the map has a box and a slowly blinking eye, and never folds away; the arrows start from it.
 - **How long.** A working agent shows how long it has been at it, a waiting one how long it has waited (red).
@@ -49,7 +50,7 @@ Or by hand: copy `mods/agent-map` into `~/.config/herdr-app/mods/`, merge `keys.
 - **Programs:** `hc machine ls --json` when the window opens, and `hc get <terminal> --json` for each agent whose status changed (when it last changed; up to 8 at a time, while the window is open), and `hc read <terminal> --json` for the one under the pointer (at most every 15 s each).
 - **Files:** `mods/agent-map/config.json` and `mods/machine-switch/config.json` (language), read only.
 - **Network:** at most once a day, one GET to `api.github.com/repos/jenthous/herdr-app-agent-map/releases/latest` (no token, nothing about you).
-- **Shared state:** `agent-map.layout`, `agent-map.all`, `agent-map.shells`, `agent-map.lang`, `agent-map.update`; reads `machine.prefs`.
+- **Shared state:** `agent-map.layout`, `agent-map.all`, `agent-map.shells`, `agent-map.lang`, `agent-map.update`, `agent-map.icons` (`all`, `other`: only agents other than the usual one, `off`; default `all`); reads `machine.prefs`.
 
 ## Config
 

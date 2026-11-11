@@ -19,7 +19,7 @@
 // Computers are grouped and named as Machine Rail does (`hc machine ls`, by host;
 // names, colors and order from shared "machine.prefs"). How long an agent has
 // rested comes from hc (`status_ms` in `hc get`), read once per open.
-import { View, div, svg } from "gpui-kit";
+import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Popup } from "gpui-base";
 import { hc, exec, theme, props, closeOverlay, shared, setShared, spaces, panes, terminals, run, readTextFile, appHome, settings, focused } from "herdr";
 import { makeUpdater } from "./update.js";
@@ -28,7 +28,7 @@ import { demo } from "./demo.js";
 // "Update Agent Map" in the header when a newer release is out.
 const UPDATER = makeUpdater({
   repo: "jenthous/herdr-app-agent-map",
-  version: "0.1.4",
+  version: "0.1.5",
   key: "agent-map.update",
   mod: "agent-map",
   name: "Agent Map",
@@ -255,7 +255,7 @@ export default class AgentMap extends View {
         id: tb.id, name: tb.name,
         terms: ps.filter((p) => p.tab === tb.id && p.terminal).map((p) => ({
           address: p.terminal, pane: p.pane, space: sp.id, tab: tb.id,
-          status: p.status ? p.status : "shell", app: p.app, title: byAddr.get(p.terminal)?.name || p.app || "",
+          status: p.status ? p.status : "shell", app: p.app, program: p.program ?? null, title: byAddr.get(p.terminal)?.name || p.app || "",
           bg: kids(p.terminal),
         })),
       }));
@@ -356,6 +356,26 @@ export default class AgentMap extends View {
 
 
   since(x) { return x.mins != null ? Date.now() - x.mins * 60000 : SINCE.get(x.address)?.at ?? 0; }
+  // The agent's own icon (programs.json): all of them, only the ones that aren't the
+  // usual agent here, or none (shared agent-map.icons; trying it out).
+  showIcon(x) {
+    const mode = shared("agent-map.icons") ?? "all";
+    if (mode === "off" || !x.program?.icon || !x.app) return false;
+    return mode === "all" || x.program.key !== this.usual;
+  }
+  // Its own colors while it works, waits, is done or rested under 6 hours; after that
+  // a gray silhouette, darker the longer it rests (6–12 h, under a day, 1–3 days, older).
+  appIcon(t, x, size) {
+    const p = x.program;
+    if (!this.live(x)) {
+      const at = this.since(x), rest = at ? Date.now() - at : Infinity;
+      if (rest >= 6 * 3600e3) return svg(p.icon).size(size).flex_none().text_color(this.restGray(t, rest));
+    }
+    return p.tint ? svg(p.icon).size(size).flex_none().text_color(t.foreground) : image(p.icon).w(size).h(size).flex_none();
+  }
+  restGray(t, rest) {
+    return rest < QUIET ? t.muted : rest < DAY ? t.dim : rest < 3 * DAY ? alpha(t.dim, "aa") : alpha(t.dim, "66");
+  }
   live(x) { return x.status === "working" || x.status === "blocked" || x.status === "done"; }
   // The terminal focused under this window: marked, and never folded away.
   here(x) { return Boolean(this.hereAddr) && x.address === this.hereAddr; }
@@ -480,6 +500,13 @@ export default class AgentMap extends View {
     if (this.update) return this.update.render();
     const t = theme(), T = this.T();
     const boards = this.groups ? this.model() : [];
+    { // the agent most terminals run: "other" mode leaves its icon out
+      const n = new Map(), progs = new Map();
+      for (const b of boards) for (const se of b.sessions) for (const sp of se.spaces) for (const tb of sp.tabs) for (const x of tb.terms)
+        if (x.app && x.program?.key) { n.set(x.program.key, (n.get(x.program.key) ?? 0) + 1); progs.set(x.program.key, x.program); }
+      this.usual = [...n].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+      this.usualProgram = progs.get(this.usual)?.icon ? progs.get(this.usual) : null;
+    }
     const q = lower(this.query.trim());
     this.nav = [];
     const drawn = boards.map((b, bi) => { const d = this.board(t, T, b, bi, q); return d && { ...d, bi }; }).filter(Boolean);
@@ -519,7 +546,11 @@ export default class AgentMap extends View {
     const chip = (id, label, on, flip) => div().id(id).px(8).h(22).flex().items_center().rounded(6).border_1()
       .border_color(on ? t.muted : t.border).bg(on ? t.raised : t.popover).text_size(11.5).text_color(on ? t.foreground : t.muted)
       .cursor_pointer().on_mouse_down("left", stop).on_click((_e, cx) => { flip(); cx.notify(); }).child(label);
-    const swatch = (c, border) => div().size(10).rounded(3).bg(c).when(Boolean(border), (el) => el.border_1().border_color(t.border));
+    // the cells' look: the usual agent's icon at their three fades, else squares
+    const pp = this.usualProgram;
+    const swatch = (c, border, rest) => pp
+      ? svg(pp.icon).size(11).flex_none().text_color(this.restGray(t, rest))
+      : div().size(10).rounded(3).bg(c).when(Boolean(border), (el) => el.border_1().border_color(t.border));
     return h_flex().h(46).flex_none().px(16).gap(10).items_center().border_b(1).border_color(t.border)
       .child(div().text_size(14).font_semibold().child(T.title))
       .child(div().min_w(0).truncate().text_size(11.5).text_color(t.dim).child(T.sum(n.working, n.blocked, n.done, n.bg)))
@@ -532,9 +563,9 @@ export default class AgentMap extends View {
       .child(div().flex_1())
       .when(!this.all && !this.query, (el) => el.child(h_flex().gap(8).items_center().text_size(10.5).text_color(t.dim)
         .child(T.legend)
-        .child(h_flex().gap(3).items_center().child(swatch(this.cellColor(t, "fresh"))).child(T.l1))
-        .child(h_flex().gap(3).items_center().child(swatch(this.cellColor(t, "mid"))).child(T.l2))
-        .child(h_flex().gap(3).items_center().child(swatch(this.cellColor(t, "old"), true)).child(T.l3))))
+        .child(h_flex().gap(3).items_center().child(swatch(this.cellColor(t, "fresh"), false, QUIET)).child(T.l1))
+        .child(h_flex().gap(3).items_center().child(swatch(this.cellColor(t, "mid"), false, DAY)).child(T.l2))
+        .child(h_flex().gap(3).items_center().child(swatch(this.cellColor(t, "old"), true, 3 * DAY)).child(T.l3))))
       .when(Boolean(UPDATER.available()), (el) => el.child(UPDATER.pill(t, this.lang)))
       .child(chip("am-lang", T.switchLang, false, () => this.toggleLang()))
       .child(chip("am-all", T.all, this.all, () => { this.all = !this.all; setShared("agent-map.all", this.all); }))
@@ -701,6 +732,7 @@ export default class AgentMap extends View {
     const at = this.since(x);
     const age = x.app && !this.live(x) && at ? T.ago(Math.floor((Date.now() - at) / 60000)) : null;
     // working: how long it has been at it; waiting on you: how long it has waited
+    const icon = this.showIcon(x);
     const runFor = x.app && at && (x.status === "working" || x.status === "blocked") ? T.ran(Math.floor((Date.now() - at) / 60000)) : null;
     // Only a waiting agent (red: it needs you) and the one you're in (accent) get a
     // box; working and done say so by
@@ -717,7 +749,8 @@ export default class AgentMap extends View {
       .hover((s) => s.bg(t.hover))
       .on_mouse_down("left", stop).on_click(() => this.go({ go: () => this.goTerm(x) }))
       .on_hover(this.hoverOn(x.address, [name, tab].filter(Boolean).join(" · ") || x.address, bi))
-      .child(this.dot(t, x.status))
+      // like the sidebar's agent list: the agent's icon first, its status mark last
+      .child(icon ? this.appIcon(t, x, 14) : this.dot(t, x.status))
       .when(Boolean(name), (el) => el.child(div().flex_none().max_w(200).truncate().font_medium().text_color(lead).child(name)))
       .when(Boolean(tab), (el) => el.child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(name ? t.muted : lead).child(tab)))
       .when(!tab, (el) => el.child(div().flex_1()))
@@ -726,7 +759,8 @@ export default class AgentMap extends View {
       .when(Boolean(runFor), (el) => el.child(div().flex_none().text_size(10.5).text_color(x.status === "working" ? t.working : t.blocked).child(runFor)))
       .when(this.here(x), (el) => el.child(svg("mods/agent-map/icons/eye.svg").size(13).flex_none().text_color(t.accent)
         .loop("opacity", { from: 1, to: 0.2, period: 1600 })))
-      .when(Boolean(age) && !this.here(x), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(age)));
+      .when(Boolean(age) && !this.here(x), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(age)))
+      .when(icon, (el) => el.child(this.dot(t, x.status)));
     const shown = this.pop(t, T, x.address, [name, tab].filter(Boolean).join(" · ") || x.address, line, bi);
     if (!x.bg.length) return shown;
     // pills keep their own width: each in a row of its own
@@ -768,6 +802,15 @@ export default class AgentMap extends View {
       const at = this.since(c.x);
       const tip = `${c.sp.name}${c.tb.name !== c.sp.name ? ` › ${c.tb.name}` : ""} · ${c.x.address}${at ? ` · ${T.ago(Math.floor((now - at) / 60000))}` : ""}`;
       const label = tip.split(" · ")[0] + (at ? ` · ${T.ago(Math.floor((now - at) / 60000))}` : "");
+      // an agent with an icon: the icon, fainter the longer it has rested
+      if (kind !== "shell" && c.x.program?.icon) {
+        return this.pop(t, T, c.x.address, label, div().id(`am-${c.x.address}`).size(18).flex().items_center().justify_center().rounded(4).cursor_pointer()
+          .when(on && this.kb, (el) => el.border_1().border_color(t.accent))
+          .hover((s) => s.bg(t.hover))
+          .on_mouse_down("left", stop).on_click(() => this.go({ go: () => this.goTerm(c.x) }))
+          .on_hover(this.hoverOn(c.x.address, label, bi))
+          .child(this.appIcon(t, c.x, 13)), bi, true);
+      }
       return this.pop(t, T, c.x.address, label, div().id(`am-${c.x.address}`).size(12).rounded(3).cursor_pointer()
         .when(kind === "shell", (el) => el.border_1().border_dashed().border_color(t.border))
         .when(kind !== "shell", (el) => el.bg(this.cellColor(t, kind)).when(kind === "old", (e2) => e2.border_1().border_color(t.border)))
