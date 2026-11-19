@@ -28,7 +28,7 @@ import { demo } from "./demo.js";
 // "Update Agent Map" in the header when a newer release is out.
 const UPDATER = makeUpdater({
   repo: "jenthous/herdr-app-agent-map",
-  version: "0.1.7",
+  version: "0.1.8",
   key: "agent-map.update",
   mod: "agent-map",
   name: "Agent Map",
@@ -337,8 +337,12 @@ export default class AgentMap extends View {
         this.boxes[key] = { x: b.x, y: b.y, width: b.width, height: b.height, bi, under };
         if (this.hover?.key === key) cx.notify();
       }))
-      .anchor("top_left")
-      .when(keyboard, (p) => p.content(div().pt(4).child(this.cardBody(t, T, addr, label))));
+      // like the pointer's card: beside rows and pills, over the neighbouring column
+      // (right; left from the right-hand column); under cells
+      .anchor(under ? "top_left" : this.cardRight(bi) ? "left_center" : "right_center")
+      .when(keyboard, (p) => p.content(div().when(under, (d) => d.pt(4)).when(!under, (d) => d.px(12)).child(this.cardBody(t, T, addr, label))));
+  }
+  cardRight(bi) { return (this.colOfBoard?.[bi] ?? 0) < 2;
   }
 
   // Beside the item for rows and pills, over the neighbouring column (right; left
@@ -352,7 +356,7 @@ export default class AgentMap extends View {
     let x, y;
     if (b.under) { x = b.x - r.x; y = b.y - r.y + b.height + 4; }
     else {
-      const right = (this.colOfBoard?.[b.bi] ?? 0) < 2;
+      const right = this.cardRight(b.bi);
       x = right ? b.x - r.x + b.width + 12 : b.x - r.x - W - 12;
       y = b.y - r.y - 2;
     }
@@ -439,10 +443,12 @@ export default class AgentMap extends View {
       else if (typing) this.handle.focus();
       else closeOverlay(props().overlay);
     } else if (k === "up" || k === "down") {
-      this.kb = true;
-      const i = Math.max(0, this.nav.findIndex((r) => r.key === this.sel));
+      if (!this.nav.some((r) => r.key === this.sel) && !this.query) this.sel = this.hereAddr;
+      const i = this.nav.findIndex((r) => r.key === this.sel);
       const n = this.nav.length;
-      if (n) this.sel = this.nav[this.sel == null ? 0 : (i + (k === "down" ? 1 : -1) + n) % n].key;
+      // the first press shows where you are (the terminal you came from), then moves
+      if (!this.kb && i >= 0) this.kb = true;
+      else if (n) { this.kb = true; this.sel = this.nav[i < 0 ? 0 : (i + (k === "down" ? 1 : -1) + n) % n].key; }
       this.hover = null; this.away = null;
       if (this.sel) this.peek(this.sel.split("#")[0], cx);
     } else if (k === "left" || k === "right") {
@@ -543,7 +549,9 @@ export default class AgentMap extends View {
     const q = lower(this.query.trim());
     this.nav = [];
     const drawn = boards.map((b, bi) => { const d = this.board(t, T, b, bi, q); return d && { ...d, bi }; }).filter(Boolean);
-    if (this.sel != null && !this.nav.some((r) => r.key === this.sel)) this.sel = null;
+    // gone from view (filtered out, or not loaded yet on the first render): back to
+    // the terminal you came from when it's shown, else none
+    if (this.sel != null && !this.nav.some((r) => r.key === this.sel)) this.sel = this.nav.some((r) => r.key === this.hereAddr) ? this.hereAddr : null;
     const placed = this.place(drawn);
     this.colOfBoard = {};
     placed.forEach((keys, ci) => keys.forEach((k) => { const d = drawn.find((x) => x.key === k); if (d) this.colOfBoard[d.bi] = ci; }));

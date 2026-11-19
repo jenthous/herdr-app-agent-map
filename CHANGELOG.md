@@ -2,6 +2,11 @@
 
 The update window in the app shows the release notes of the newest release; they are written from this file.
 
+## v0.1.8
+
+- **Arrows start where you are:** the first arrow press now selects the terminal you were in when you opened the map and shows its card; the next presses move. Before, the selection was lost while the map was still loading, so the first press jumped to the top.
+- **Arrow-key card beside the item:** the selected row's or pill's card now opens beside it over the next column, like the pointer's card (on the left from the right-hand column), instead of under it. Cells still show theirs underneath.
+
 ## v0.1.7
 
 - **Background terminals:** terminals running with no tab and no parent in one (`hc run --bg --no-parent`, a script started outside Herdr) were nowhere on the map. Each session now has a "background" group of them, with how long each has been running; click one to peek at it (keep it as a tab from there).
